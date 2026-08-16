@@ -1,0 +1,40 @@
+{
+  "name": "openwiki-graph-reasoning-memory-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Proof of concept that captures OpenWiki execution events as Neo4j Agent Memory-compatible reasoning traces.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "augment-task": "tsx src/cli.ts augment-task",
+    "check": "npm run test:all",
+    "demo": "tsx src/cli.ts demo",
+    "ingest": "tsx src/cli.ts ingest",
+    "query-memory": "tsx src/cli.ts query-memory",
+    "schema": "tsx src/cli.ts schema",
+    "mint-token": "tsx src/cli.ts mint-token",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:all": "npm run typecheck && npm run test:unit && npm run test:integration && npm run test:coverage && npm run build && npm run test:e2e",
+    "test:coverage": "vitest run --config vitest.coverage.config.ts --coverage",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:neo4j": "vitest run --config vitest.integration.config.ts test/integration/neo4j-live.test.ts",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "neo4j-driver": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

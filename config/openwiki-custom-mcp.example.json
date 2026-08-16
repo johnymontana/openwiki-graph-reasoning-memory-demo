@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "allowedTools": ["<tool-name-returned-by-tools-list>"],
+  "readOnlyOperations": [],
+  "transport": {
+    "type": "http",
+    "url": "https://mcp.neo4j.io/agent?project_id=<project-id>&agent_id=<agent-id>",
+    "headers": {
+      "Authorization": "Bearer ${AURA_AGENT_MCP_ACCESS_TOKEN}"
+    }
+  }
+}
+

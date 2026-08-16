@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.x, 24.x]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit, integration, coverage, build, and E2E tests
+        run: npm run test:all
+        env:
+          CI: "true"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-node-${{ matrix.node }}
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  neo4j-integration:
+    name: Live Neo4j integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      neo4j:
+        image: neo4j:5.26.28
+        env:
+          NEO4J_AUTH: neo4j/test-password
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p test-password 'RETURN 1;'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 20s
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Execute schema and ingestion against Neo4j
+        run: npm run test:integration:neo4j
+        env:
+          CI: "true"
+          TEST_NEO4J_URI: bolt://127.0.0.1:7687
+          TEST_NEO4J_USERNAME: neo4j
+          TEST_NEO4J_PASSWORD: test-password
+          TEST_NEO4J_DATABASE: neo4j
+
+  openwiki-patch:
+    name: OpenWiki patch compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Fetch pinned OpenWiki revision
+        run: |
+          git init /tmp/openwiki
+          git -C /tmp/openwiki remote add origin https://github.com/langchain-ai/openwiki.git
+          git -C /tmp/openwiki fetch --depth=1 origin 60aada6c30d7e1d04d253e6ee52836c9a883f607
+          git -C /tmp/openwiki checkout --detach FETCH_HEAD
+
+      - name: Check reasoning-hook patch
+        run: git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-v0.3.3-reasoning-hooks.patch"

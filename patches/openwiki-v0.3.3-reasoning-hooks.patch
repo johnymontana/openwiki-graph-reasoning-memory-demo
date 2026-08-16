@@ -1,0 +1,118 @@
+diff --git a/src/agent/index.ts b/src/agent/index.ts
+index cec26b2..eaa776c 100644
+--- a/src/agent/index.ts
++++ b/src/agent/index.ts
+@@ -133,6 +133,7 @@ import {
+   getUpdateNoopStatus,
+   createRunContext,
+   persistRunMetadataIfChanged,
++  readTemporaryPlanFile,
+   removeTemporaryPlanFile,
+   shouldCheckUpdateNoop,
+ } from "./utils.js";
+@@ -551,6 +552,13 @@ async function runOpenWikiAgentCore(
+ 
+   try {
+     for await (const chunk of stream) {
++      try {
++        await options.onRawStreamChunk?.(chunk);
++      } catch {
++        // Telemetry and memory capture must never change the OpenWiki run.
++        emitDebug(options, "reasoning.capture.rawChunk=failed");
++      }
++
+       const event = parseAgentStreamChunk(chunk);
+ 
+       if (event) {
+@@ -570,6 +578,7 @@ async function runOpenWikiAgentCore(
+   } catch (error) {
+     tagErrorStage(error, "run");
+ 
++    await captureTemporaryPlanFile(command, cwd, outputMode, options);
+     await cleanupTemporaryPlanFile(command, cwd, outputMode, options).catch(
+       () => {
+         emitDebug(options, "plan.cleanup=failed");
+@@ -625,6 +634,7 @@ async function runOpenWikiAgentCore(
+   // filesystem code becomes filesystem_error), and deriveOwner's finalize
+   // exception routes that to openwiki since the run reached our own persistence.
+   const metadataWritten = await inStage("finalize", async () => {
++    await captureTemporaryPlanFile(command, cwd, outputMode, options);
+     await cleanupTemporaryPlanFile(command, cwd, outputMode, options);
+     return persistRunMetadataIfChanged(
+       command,
+@@ -654,6 +664,28 @@ async function runOpenWikiAgentCore(
+   };
+ }
+ 
++async function captureTemporaryPlanFile(
++  command: OpenWikiCommand,
++  cwd: string,
++  outputMode: OpenWikiOutputMode,
++  options: OpenWikiRunOptions,
++): Promise<void> {
++  if (command === "chat" || !options.onPlanSnapshot) {
++    return;
++  }
++
++  try {
++    const plan = await readTemporaryPlanFile(cwd, outputMode);
++    if (plan !== null) {
++      await options.onPlanSnapshot(plan);
++      emitDebug(options, "reasoning.capture.plan=captured");
++    }
++  } catch {
++    // As with raw stream capture, observability is deliberately fail-open.
++    emitDebug(options, "reasoning.capture.plan=failed");
++  }
++}
++
+ async function cleanupTemporaryPlanFile(
+   command: OpenWikiCommand,
+   cwd: string,
+diff --git a/src/agent/types.ts b/src/agent/types.ts
+index a8b2922..ef5c561 100644
+--- a/src/agent/types.ts
++++ b/src/agent/types.ts
+@@ -37,6 +37,13 @@ export type OpenWikiRunOptions = {
+   language?: string | null;
+   modelId?: string | null;
+   onEvent?: (event: OpenWikiRunEvent) => void;
++  /** Observable temporary plan content, captured before OpenWiki deletes it. */
++  onPlanSnapshot?: (plan: string) => void | Promise<void>;
++  /**
++   * Lossless LangGraph stream seam for telemetry such as tool outputs/errors.
++   * Consumers must redact and bound data before persistence.
++   */
++  onRawStreamChunk?: (chunk: unknown) => void | Promise<void>;
+   outputMode?: OpenWikiOutputMode;
+   threadId?: string;
+   userMessage?: string | null;
+diff --git a/src/agent/utils.ts b/src/agent/utils.ts
+index a8acd5a..bdf2121 100644
+--- a/src/agent/utils.ts
++++ b/src/agent/utils.ts
+@@ -222,6 +222,24 @@ export async function persistRunMetadataIfChanged(
+   return true;
+ }
+ 
++/** Reads the observable planning artifact before run finalization removes it. */
++export async function readTemporaryPlanFile(
++  cwd: string,
++  outputMode: OpenWikiOutputMode,
++): Promise<string | null> {
++  const planFile = getTemporaryPlanFilePath(cwd, outputMode);
++
++  try {
++    return await readFile(planFile, "utf8");
++  } catch (error) {
++    if (isFileNotFoundError(error)) {
++      return null;
++    }
++
++    throw error;
++  }
++}
++
+ /**
+  * Removes the temporary planning file the agent creates during init/update runs.
+  */

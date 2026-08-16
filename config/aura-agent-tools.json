@@ -1,0 +1,60 @@
+[
+  {
+    "type": "cypherTemplate",
+    "name": "find-reasoning-for-task",
+    "description": "Find successful prior OpenWiki execution traces whose task or outcome resembles the current task, including ordered actions and tool outcomes.",
+    "enabled": true,
+    "config": {
+      "template": "CALL db.index.fulltext.queryNodes('reasoning_memory_search', $query, {limit: $limit}) YIELD node AS trace, score WHERE trace.success = true OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep) OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall) WITH trace, score, step, call ORDER BY score DESC, step.step_number ASC WITH trace, score, step, collect(CASE WHEN call IS NULL THEN null ELSE {tool: call.tool_name, status: call.status, duration_ms: call.duration_ms, arguments: call.arguments, result: call.result, error: call.error} END) AS raw_calls ORDER BY score DESC, step.step_number ASC WITH trace, score, collect(CASE WHEN step IS NULL THEN null ELSE {step_number: step.step_number, thought: step.thought, action: step.action, observation: step.observation, tool_calls: [item IN raw_calls WHERE item IS NOT NULL]} END) AS raw_steps RETURN trace.id AS trace_id, trace.task AS task, trace.outcome AS outcome, score, [item IN raw_steps WHERE item IS NOT NULL][0..20] AS steps ORDER BY score DESC LIMIT $limit",
+      "parameters": [
+        {
+          "name": "query",
+          "data_type": "string",
+          "description": "Keywords describing the current OpenWiki task."
+        },
+        {
+          "name": "limit",
+          "data_type": "integer",
+          "description": "Maximum number of successful traces to return; use 5 unless the caller asks otherwise."
+        }
+      ]
+    }
+  },
+  {
+    "type": "cypherTemplate",
+    "name": "recent-reasoning-traces",
+    "description": "Return the most recent OpenWiki reasoning traces and their ordered execution steps for recency-based fallback memory.",
+    "enabled": true,
+    "config": {
+      "template": "MATCH (trace:ReasoningTrace) WHERE $success_only = false OR trace.success = true WITH trace ORDER BY trace.started_at DESC LIMIT $limit OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep) OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall) WITH trace, step, call ORDER BY trace.started_at DESC, step.step_number ASC WITH trace, step, collect(CASE WHEN call IS NULL THEN null ELSE {tool: call.tool_name, status: call.status, duration_ms: call.duration_ms, error: call.error} END) AS raw_calls ORDER BY trace.started_at DESC, step.step_number ASC WITH trace, collect(CASE WHEN step IS NULL THEN null ELSE {step_number: step.step_number, thought: step.thought, action: step.action, observation: step.observation, tool_calls: [item IN raw_calls WHERE item IS NOT NULL]} END) AS raw_steps RETURN trace.id AS trace_id, trace.task AS task, trace.outcome AS outcome, trace.success AS success, trace.started_at AS started_at, [item IN raw_steps WHERE item IS NOT NULL][0..20] AS steps ORDER BY started_at DESC",
+      "parameters": [
+        {
+          "name": "limit",
+          "data_type": "integer",
+          "description": "Maximum number of traces to return; use 5 unless the caller asks otherwise."
+        },
+        {
+          "name": "success_only",
+          "data_type": "boolean",
+          "description": "True to return only successful traces."
+        }
+      ]
+    }
+  },
+  {
+    "type": "cypherTemplate",
+    "name": "openwiki-tool-reliability",
+    "description": "Rank OpenWiki tools by observed call volume, success rate, failures, and latency.",
+    "enabled": true,
+    "config": {
+      "template": "MATCH (tool:Tool) RETURN tool.name AS tool, tool.total_calls AS total_calls, tool.successful_calls AS successful_calls, tool.failed_calls AS failed_calls, CASE WHEN tool.total_calls = 0 THEN 0.0 ELSE toFloat(tool.successful_calls) / tool.total_calls END AS success_rate, CASE WHEN tool.total_calls = 0 THEN null ELSE toFloat(tool.total_duration_ms) / tool.total_calls END AS avg_duration_ms, tool.last_used_at AS last_used_at ORDER BY total_calls DESC LIMIT $limit",
+      "parameters": [
+        {
+          "name": "limit",
+          "data_type": "integer",
+          "description": "Maximum number of tool statistics rows to return; use 10 unless the caller asks otherwise."
+        }
+      ]
+    }
+  }
+]

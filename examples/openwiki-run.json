@@ -1,0 +1,93 @@
+{
+  "trace": {
+    "traceId": "openwiki-demo-001",
+    "sessionId": "openwiki-session-demo",
+    "task": "Inspect a repository and document its architecture",
+    "startedAt": "2026-08-15T16:00:00.000Z",
+    "metadata": {
+      "command": "init",
+      "outputMode": "repository"
+    }
+  },
+  "entries": [
+    {
+      "kind": "plan_snapshot",
+      "at": "2026-08-15T16:00:00.500Z",
+      "plan": "# Documentation plan\n\n- Inventory source files.\n- Locate agent entry points.\n- Write an architecture page with source anchors."
+    },
+    {
+      "kind": "raw_chunk",
+      "at": "2026-08-15T16:00:01.000Z",
+      "chunk": [
+        ["agent"],
+        "tools",
+        {
+          "event": "on_tool_start",
+          "name": "glob",
+          "toolCallId": "call-glob-1",
+          "input": {
+            "pattern": "src/**/*.{ts,tsx}",
+            "authorization": "Bearer demo-secret"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "raw_chunk",
+      "at": "2026-08-15T16:00:01.240Z",
+      "chunk": [
+        ["agent"],
+        "tools",
+        {
+          "event": "on_tool_end",
+          "name": "glob",
+          "toolCallId": "call-glob-1",
+          "output": ["src/agent/index.ts", "src/agent/prompt.ts"]
+        }
+      ]
+    },
+    {
+      "kind": "raw_chunk",
+      "at": "2026-08-15T16:00:02.000Z",
+      "chunk": [
+        ["agent"],
+        "tools",
+        {
+          "event": "on_tool_start",
+          "name": "read_file",
+          "toolCallId": "call-read-1",
+          "input": {
+            "path": "src/agent/index.ts"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "raw_chunk",
+      "at": "2026-08-15T16:00:02.410Z",
+      "chunk": [
+        ["agent"],
+        "tools",
+        {
+          "event": "on_tool_end",
+          "name": "read_file",
+          "toolCallId": "call-read-1",
+          "output": "Agent construction and streaming loop found."
+        }
+      ]
+    },
+    {
+      "kind": "public_event",
+      "at": "2026-08-15T16:00:03.000Z",
+      "event": {
+        "type": "text",
+        "source": "main",
+        "text": "Documented the repository architecture and agent execution flow."
+      }
+    }
+  ],
+  "finish": {
+    "completedAt": "2026-08-15T16:00:03.500Z",
+    "success": true
+  }
+}
