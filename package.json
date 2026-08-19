@@ -14,6 +14,7 @@
     "demo": "tsx src/cli.ts demo",
     "ingest": "tsx src/cli.ts ingest",
     "query-memory": "tsx src/cli.ts query-memory",
+    "run": "tsx src/cli.ts run",
     "schema": "tsx src/cli.ts schema",
     "mint-token": "tsx src/cli.ts mint-token",
     "test": "npm run test:unit && npm run test:integration",

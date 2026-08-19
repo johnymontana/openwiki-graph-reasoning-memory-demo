@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliDependencies } from "../src/cli.js";
 import type { AuraAgentMemoryResult } from "../src/mcp/aura-agent-client.js";
+import type {
+  OpenWikiRunRecord,
+  OpenWikiRunRequest,
+} from "../src/openwiki/openwiki-runner.js";
 import type { ReasoningStore } from "../src/store/reasoning-store.js";
 
 function createHarness(options: {
@@ -33,15 +37,42 @@ function createHarness(options: {
   );
   const createMcpClient = vi.fn(() => ({ queryMemory }));
   const createTokenProvider = vi.fn(() => ({ getAccessToken }));
+  const deriveRepository = vi.fn(async () => "github.com/example/derived");
+  const runOpenWiki = vi.fn(
+    async (request: OpenWikiRunRequest): Promise<OpenWikiRunRecord> => ({
+      captureLogPath: `captures/${request.traceId}.json`,
+      childExitCode: 0,
+      persisted: request.ingest,
+      runResult: { command: request.command, model: "claude-haiku-4-5" },
+      timedOut: false,
+      trace: {
+        completedAt: "2026-08-19T00:00:10.000Z",
+        id: request.traceId,
+        metadata: request.metadata,
+        repository: request.repository,
+        sessionId: request.sessionId,
+        startedAt: "2026-08-19T00:00:00.000Z",
+        steps: [],
+        success: true,
+        task: request.task,
+      },
+      warnings: [],
+      wikiStats: { fileCount: 3, totalBytes: 2_048 },
+    }),
+  );
+  const runOpenWikiChild = vi.fn(async (_configPath: string) => 0);
   const dependencies: CliDependencies = {
     createMcpClient,
     createStore,
     createTokenProvider,
+    deriveRepository,
     environment:
       options.environment ?? {
         AURA_AGENT_MCP_CLIENT_ID: "client-id",
         AURA_AGENT_MCP_CLIENT_SECRET: "client-secret",
       },
+    runOpenWiki,
+    runOpenWikiChild,
   };
   const log = vi.fn();
   const error = vi.fn();
@@ -53,12 +84,15 @@ function createHarness(options: {
     createStore,
     createTokenProvider,
     dependencies,
+    deriveRepository,
     ensureSchema,
     error,
     getAccessToken,
     io,
     log,
     queryMemory,
+    runOpenWiki,
+    runOpenWikiChild,
     saveTrace,
   };
 }
@@ -247,6 +281,179 @@ describe("CLI integration", () => {
       "failed open",
     );
     expect(harness.error.mock.calls[0]?.[0]).toContain("MCP unavailable");
+  });
+
+  it("runs an instrumented OpenWiki run with defaults and a derived repository", async () => {
+    const harness = createHarness();
+
+    const exitCode = await runCli(
+      ["run", "--repo", "/tmp/example-repo"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(harness.deriveRepository).toHaveBeenCalledWith("/tmp/example-repo");
+    expect(harness.runOpenWiki).toHaveBeenCalledOnce();
+    const request = harness.runOpenWiki.mock.calls[0]![0];
+    expect(request).toMatchObject({
+      command: "init",
+      ingest: true,
+      isolateHome: true,
+      repoPath: "/tmp/example-repo",
+      repository: "github.com/example/derived",
+      task: "init the OpenWiki for github.com/example/derived",
+      timeoutMs: 20 * 60_000,
+      userMessage: "init the OpenWiki for github.com/example/derived",
+    });
+    expect(request.metadata).toMatchObject({ augmented: false });
+    expect(request.sessionId).toBe(`run:${request.traceId}`);
+    expect(harness.queryMemory).not.toHaveBeenCalled();
+    expect(harness.log.mock.calls[0]?.[0]).toContain("Trace");
+    expect(harness.log.mock.calls[0]?.[0]).toContain("wiki output: 3 file(s)");
+  });
+
+  it("augments the run task over MCP when --augment is set", async () => {
+    const harness = createHarness();
+
+    const exitCode = await runCli(
+      [
+        "run",
+        "--repo",
+        "/tmp/example-repo",
+        "--augment",
+        "--repository",
+        "github.com/example/demo-repo",
+        "--command",
+        "update",
+        "--task",
+        "Refresh the architecture page",
+        "--no-ingest",
+        "--no-isolate-home",
+        "--timeout-minutes",
+        "5",
+      ],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(harness.deriveRepository).not.toHaveBeenCalled();
+    expect(harness.queryMemory).toHaveBeenCalledWith(
+      expect.stringContaining("Repository: github.com/example/demo-repo"),
+    );
+    const request = harness.runOpenWiki.mock.calls[0]![0];
+    expect(request).toMatchObject({
+      command: "update",
+      ingest: false,
+      isolateHome: false,
+      repository: "github.com/example/demo-repo",
+      task: "Refresh the architecture page",
+      timeoutMs: 5 * 60_000,
+    });
+    expect(request.userMessage).toContain("Refresh the architecture page");
+    expect(request.userMessage).toContain("openwiki_reasoning_memory");
+    expect(request.metadata).toMatchObject({
+      augmented: true,
+      memoryChars: "Use glob before read_file.".length,
+    });
+  });
+
+  it("keeps the run going unaugmented when recall fails open", async () => {
+    const harness = createHarness({
+      memoryError: new Error("MCP unavailable"),
+    });
+
+    const exitCode = await runCli(
+      ["run", "--repo", "/tmp/example-repo", "--augment"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    const request = harness.runOpenWiki.mock.calls[0]![0];
+    expect(request.userMessage).toBe(request.task);
+    expect(request.metadata).toMatchObject({
+      augmented: true,
+      recallFailed: true,
+    });
+    expect(harness.error.mock.calls.flat().join("\n")).toContain(
+      "failed open",
+    );
+  });
+
+  it("requires --task for update runs and --repo for every run", async () => {
+    const harness = createHarness();
+
+    await expect(
+      runCli(
+        ["run", "--repo", "/tmp/example-repo", "--command", "update"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("requires --task");
+    await expect(
+      runCli(["run"], harness.io, harness.dependencies),
+    ).rejects.toThrow("Usage: npm run run");
+    await expect(
+      runCli(
+        ["run", "--repo", "/tmp/example-repo", "--frobnicate"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("Unknown run argument(s): --frobnicate");
+    expect(harness.runOpenWiki).not.toHaveBeenCalled();
+  });
+
+  it("exits non-zero and surfaces warnings when the child run fails", async () => {
+    const harness = createHarness();
+    harness.runOpenWiki.mockResolvedValueOnce({
+      captureLogPath: "captures/failed.json",
+      childExitCode: 1,
+      persisted: false,
+      timedOut: false,
+      trace: {
+        id: "failed-trace",
+        metadata: {},
+        sessionId: "run:failed-trace",
+        startedAt: "2026-08-19T00:00:00.000Z",
+        steps: [],
+        success: false,
+        task: "init the OpenWiki for x",
+      },
+      warnings: ["The trace has no captured steps — verify the fork's reasoning hooks and see the child log."],
+      wikiStats: { fileCount: 0, totalBytes: 0 },
+    });
+
+    const exitCode = await runCli(
+      ["run", "--repo", "/tmp/example-repo"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(harness.error.mock.calls.flat().join("\n")).toContain(
+      "no captured steps",
+    );
+  });
+
+  it("dispatches openwiki-child to the injected child runner", async () => {
+    const harness = createHarness();
+    harness.runOpenWikiChild.mockResolvedValueOnce(3);
+
+    const exitCode = await runCli(
+      ["openwiki-child", "work/child-config.json"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(3);
+    expect(harness.runOpenWikiChild).toHaveBeenCalledWith(
+      expect.stringMatching(/work\/child-config\.json$/u),
+    );
+    await expect(
+      runCli(["openwiki-child"], harness.io, harness.dependencies),
+    ).rejects.toThrow("Usage: openwiki-child");
   });
 
   it("mints a token with the configured client credentials", async () => {

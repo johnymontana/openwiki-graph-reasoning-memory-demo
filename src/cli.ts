@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { config as loadEnvironment } from "dotenv";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   AuraAgentTokenProvider,
   createAuraAgentMcpClientFromEnvironment,
@@ -12,12 +14,25 @@ import {
   augmentOpenWikiTaskWithReasoningMemory,
   type ReasoningMemoryClient,
 } from "./integration/memory-context.js";
+import {
+  createDefaultRunnerDeps,
+  runInstrumentedOpenWiki,
+  type OpenWikiRunRecord,
+  type OpenWikiRunRequest,
+} from "./openwiki/openwiki-runner.js";
+import { deriveRepositoryId } from "./openwiki/repository-id.js";
+import {
+  executeChildRun,
+  parseChildRunConfig,
+} from "./openwiki/runner-child.js";
 import { Neo4jReasoningStore } from "./store/neo4j-reasoning-store.js";
 import type { ReasoningStore } from "./store/reasoning-store.js";
 
 loadEnvironment({ quiet: true });
 
 const DEFAULT_CAPTURE_FILE = resolve("examples/openwiki-run.json");
+const DEMO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const DEFAULT_RUN_TIMEOUT_MINUTES = 20;
 
 export interface CliDependencies {
   createMcpClient: () => ReasoningMemoryClient;
@@ -25,15 +40,54 @@ export interface CliDependencies {
   createTokenProvider: (
     options: AuraAgentTokenProviderOptions,
   ) => Pick<AuraAgentTokenProvider, "getAccessToken">;
+  deriveRepository: (repoPath: string) => Promise<string>;
   environment: NodeJS.ProcessEnv;
+  runOpenWiki: (request: OpenWikiRunRequest) => Promise<OpenWikiRunRecord>;
+  runOpenWikiChild: (configPath: string) => Promise<number>;
 }
 
+/* v8 ignore start -- production wiring; every branch is covered through the
+   injected CliDependencies used by the test harnesses */
 const DEFAULT_DEPENDENCIES: CliDependencies = {
   createMcpClient: () => createAuraAgentMcpClientFromEnvironment(),
   createStore: () => Neo4jReasoningStore.fromEnvironment(),
   createTokenProvider: (options) => new AuraAgentTokenProvider(options),
+  deriveRepository: (repoPath) => deriveRepositoryId(repoPath),
   environment: process.env,
+  runOpenWiki: async (request) => {
+    if (!request.ingest) {
+      // The runner never touches the store when ingestion is disabled, so
+      // --no-ingest works without any Neo4j configuration.
+      return runInstrumentedOpenWiki(
+        request,
+        createDefaultRunnerDeps({
+          demoRoot: DEMO_ROOT,
+          store: {
+            saveTrace: async () => {
+              throw new Error("Ingestion is disabled for this run.");
+            },
+          },
+        }),
+      );
+    }
+
+    const store = Neo4jReasoningStore.fromEnvironment();
+    try {
+      await store.ensureSchema();
+      return await runInstrumentedOpenWiki(
+        request,
+        createDefaultRunnerDeps({ demoRoot: DEMO_ROOT, store }),
+      );
+    } finally {
+      await store.close();
+    }
+  },
+  runOpenWikiChild: async (configPath) => {
+    const source = await readFile(configPath, "utf8");
+    return executeChildRun(parseChildRunConfig(JSON.parse(source)));
+  },
 };
+/* v8 ignore stop */
 
 export async function runCli(
   argv: string[],
@@ -131,6 +185,98 @@ export async function runCli(
       return 0;
     }
 
+    case "run": {
+      const parsed = parseRunArguments(args);
+      const repoPath = resolve(parsed.repo);
+      if (parsed.command === "update" && !parsed.task) {
+        throw new Error(
+          "run --command update requires --task: OpenWiki no-ops an update on a clean tree without one.",
+        );
+      }
+
+      const repository =
+        parsed.repository ?? (await dependencies.deriveRepository(repoPath));
+      const task =
+        parsed.task?.trim() || `${parsed.command} the OpenWiki for ${repository}`;
+      const traceId = randomUUID();
+      const sessionId = parsed.session ?? `run:${traceId}`;
+      const metadata: Record<string, unknown> = {
+        augmented: parsed.augment,
+        command: parsed.command,
+        outputMode: "repository",
+      };
+
+      let userMessage = task;
+      if (parsed.augment) {
+        const augmentation = await augmentOpenWikiTaskWithReasoningMemory(
+          task,
+          dependencies.createMcpClient(),
+          { repository },
+        );
+        metadata.memoryChars = augmentation.memory?.text.length ?? 0;
+        metadata.recallDurationMs = augmentation.recallDurationMs;
+        if (augmentation.recallError) {
+          metadata.recallFailed = true;
+          io.error(
+            `Reasoning-memory recall failed open; running unaugmented: ${augmentation.recallError.message}`,
+          );
+        } else {
+          io.error(
+            `Recalled reasoning memory over MCP in ${augmentation.recallDurationMs}ms (${String(metadata.memoryChars)} chars).`,
+          );
+        }
+        userMessage = augmentation.augmentedTask;
+      }
+
+      io.error(
+        `Running openwiki ${parsed.command} on ${repoPath} (repository ${repository}); the wiki is written to ${join(repoPath, "openwiki")}.`,
+      );
+      const record = await dependencies.runOpenWiki({
+        captureDir: parsed.captureDir,
+        command: parsed.command,
+        debug: parsed.debug,
+        ingest: parsed.ingest,
+        isolateHome: parsed.isolateHome,
+        metadata,
+        modelId: parsed.model,
+        repoPath,
+        repository,
+        sessionId,
+        task,
+        timeoutMs: parsed.timeoutMinutes * 60_000,
+        traceId,
+        userMessage,
+        workDir: join(parsed.captureDir, `${traceId}-work`),
+      });
+
+      for (const warning of record.warnings) {
+        io.error(`Warning: ${warning}`);
+      }
+      const toolCallCount = record.trace.steps.reduce(
+        (total, step) => total + step.toolCalls.length,
+        0,
+      );
+      io.log(
+        [
+          `Trace ${record.trace.id} (${parsed.command} on ${repository})`,
+          `  steps: ${record.trace.steps.length}, tool calls: ${toolCallCount}, success: ${String(record.trace.success ?? "unknown")}`,
+          `  wiki output: ${record.wikiStats.fileCount} file(s), ${record.wikiStats.totalBytes} bytes`,
+          `  persisted to Neo4j: ${record.persisted ? "yes" : "no"}`,
+          `  capture log: ${record.captureLogPath}`,
+        ].join("\n"),
+      );
+
+      return record.childExitCode === 0 && !record.timedOut ? 0 : 1;
+    }
+
+    case "openwiki-child": {
+      const configPath = args[0];
+      if (!configPath) {
+        throw new Error("Usage: openwiki-child <child-config.json>");
+      }
+      return dependencies.runOpenWikiChild(resolve(configPath));
+    }
+
     case "help":
     case "--help":
     case "-h":
@@ -153,6 +299,111 @@ async function saveToNeo4j(
   } finally {
     await store.close();
   }
+}
+
+interface RunArguments {
+  augment: boolean;
+  captureDir: string;
+  command: "init" | "update";
+  debug: boolean;
+  ingest: boolean;
+  isolateHome: boolean;
+  model?: string;
+  repo: string;
+  repository?: string;
+  session?: string;
+  task?: string;
+  timeoutMinutes: number;
+}
+
+function parseRunArguments(args: string[]): RunArguments {
+  let remaining = args;
+  const options: Record<string, string | undefined> = {};
+  for (const name of [
+    "--repo",
+    "--command",
+    "--task",
+    "--repository",
+    "--model",
+    "--session",
+    "--timeout-minutes",
+    "--capture-dir",
+  ]) {
+    const extracted = extractOption(remaining, name);
+    options[name] = extracted.value;
+    remaining = extracted.remaining;
+  }
+  const flags: Record<string, boolean> = {};
+  for (const name of [
+    "--augment",
+    "--no-ingest",
+    "--no-isolate-home",
+    "--debug",
+  ]) {
+    const extracted = extractFlag(remaining, name);
+    flags[name] = extracted.present;
+    remaining = extracted.remaining;
+  }
+  if (remaining.length > 0) {
+    throw new Error(`Unknown run argument(s): ${remaining.join(" ")}`);
+  }
+
+  const repo = options["--repo"];
+  if (!repo) {
+    throw new Error(
+      "Usage: npm run run -- --repo <path> [--command init|update] [--task <text>] [--augment] " +
+        "[--repository <host/owner/repo>] [--model <id>] [--session <id>] " +
+        `[--timeout-minutes ${DEFAULT_RUN_TIMEOUT_MINUTES}] [--capture-dir captures] [--no-ingest] [--no-isolate-home] [--debug]`,
+    );
+  }
+  const command = options["--command"] ?? "init";
+  if (command !== "init" && command !== "update") {
+    throw new Error("--command must be init or update.");
+  }
+  const timeoutMinutes = options["--timeout-minutes"]
+    ? parsePositiveNumber(options["--timeout-minutes"], "--timeout-minutes")
+    : DEFAULT_RUN_TIMEOUT_MINUTES;
+
+  return {
+    augment: flags["--augment"]!,
+    captureDir: options["--capture-dir"] ?? "captures",
+    command,
+    debug: flags["--debug"]!,
+    ingest: !flags["--no-ingest"],
+    isolateHome: !flags["--no-isolate-home"],
+    model: options["--model"],
+    repo,
+    repository: options["--repository"],
+    session: options["--session"],
+    task: options["--task"],
+    timeoutMinutes,
+  };
+}
+
+function parsePositiveNumber(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive number.`);
+  }
+  return parsed;
+}
+
+/** Removes one boolean `--name` flag from an argument list. */
+function extractFlag(
+  argumentList: string[],
+  name: string,
+): { present: boolean; remaining: string[] } {
+  const index = argumentList.indexOf(name);
+  if (index === -1) {
+    return { present: false, remaining: argumentList };
+  }
+  return {
+    present: true,
+    remaining: [
+      ...argumentList.slice(0, index),
+      ...argumentList.slice(index + 1),
+    ],
+  };
 }
 
 /** Removes one `--name <value>` pair from an argument list. */
@@ -194,7 +445,13 @@ function helpText(): string {
     "  npm run ingest -- [capture.json]",
     "  npm run schema",
     "  npm run query-memory -- <question>",
-    "  npm run augment-task -- <OpenWiki task>",
+    "  npm run augment-task -- [--repository <host/owner/repo>] <OpenWiki task>",
+    "  npm run run -- --repo <path> [--command init|update] [--task <text>] [--augment]",
+    "                 [--repository <id>] [--model <id>] [--session <id>]",
+    "                 [--timeout-minutes 20] [--capture-dir captures]",
+    "                 [--no-ingest] [--no-isolate-home] [--debug]",
+    "      Runs an instrumented OpenWiki run from the built fork (OPENWIKI_DIR)",
+    "      and persists the reasoning trace. Costs real model tokens.",
     "  npx tsx src/cli.ts mint-token",
   ].join("\n");
 }

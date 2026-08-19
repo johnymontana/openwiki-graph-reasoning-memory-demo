@@ -6,7 +6,10 @@ export default defineConfig({
     include: [
       "test/cli.test.ts",
       "test/neo4j-reasoning-store.test.ts",
+      "test/openwiki-runner.test.ts",
       "test/reasoning-run-capture.test.ts",
+      "test/runner-child.test.ts",
+      "test/runner-default-deps.test.ts",
       "test/integration/**/*.test.ts",
     ],
     testTimeout: 30_000,
