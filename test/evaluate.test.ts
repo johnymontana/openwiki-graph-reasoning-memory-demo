@@ -29,6 +29,7 @@ function successRecord(request: OpenWikiRunRequest): OpenWikiRunRecord {
   return {
     captureLogPath: `${request.captureDir}/${request.traceId}.json`,
     childExitCode: 0,
+    cleanExit: true,
     persisted: true,
     runResult: { command: request.command, model: "claude-haiku-4-5" },
     timedOut: false,

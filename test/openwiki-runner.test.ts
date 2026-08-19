@@ -138,6 +138,7 @@ describe("runInstrumentedOpenWiki", () => {
     const record = await runInstrumentedOpenWiki(REQUEST, harness.deps);
 
     expect(record.childExitCode).toBe(0);
+    expect(record.cleanExit).toBe(true);
     expect(record.timedOut).toBe(false);
     expect(record.persisted).toBe(true);
     expect(record.warnings).toEqual([]);
@@ -201,6 +202,7 @@ describe("runInstrumentedOpenWiki", () => {
     const record = await runInstrumentedOpenWiki(REQUEST, harness.deps);
 
     expect(record.timedOut).toBe(true);
+    expect(record.cleanExit).toBe(false);
     expect(record.trace.success).toBe(false);
     expect(record.trace.metadata).toMatchObject({ error_kind: "timeout" });
     expect(record.warnings.join("\n")).toContain("no captured steps");
@@ -245,6 +247,7 @@ describe("runInstrumentedOpenWiki", () => {
     const record = await runInstrumentedOpenWiki(REQUEST, harness.deps);
 
     expect(record.trace.success).toBe(false);
+    expect(record.cleanExit).toBe(false);
     expect(record.trace.steps).toHaveLength(0);
     expect(record.trace.metadata).toMatchObject({ error_kind: "child_exit" });
     expect(record.persisted).toBe(true);

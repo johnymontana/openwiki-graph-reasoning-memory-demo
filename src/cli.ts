@@ -329,7 +329,7 @@ export async function runCli(
         ].join("\n"),
       );
 
-      return record.childExitCode === 0 && !record.timedOut ? 0 : 1;
+      return record.cleanExit ? 0 : 1;
     }
 
     case "openwiki-child": {
@@ -378,10 +378,7 @@ export async function runCli(
         (result) => result.success === true,
       ).length;
       const broken = summary.results.filter(
-        (result) =>
-          result.error !== undefined ||
-          result.timedOut ||
-          result.childExitCode !== 0,
+        (result) => result.error !== undefined || !result.cleanExit,
       );
       io.log(
         [
@@ -742,8 +739,12 @@ function helpText(): string {
 
 const entryPoint = process.argv[1];
 if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) {
-  runCli(process.argv.slice(2)).catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  runCli(process.argv.slice(2))
+    .then((exitCode) => {
+      process.exitCode = exitCode;
+    })
+    .catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    });
 }

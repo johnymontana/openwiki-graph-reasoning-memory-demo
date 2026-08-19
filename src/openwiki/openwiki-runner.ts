@@ -46,6 +46,13 @@ export interface OpenWikiRunRequest {
 export interface OpenWikiRunRecord {
   captureLogPath: string;
   childExitCode: number | null;
+  /**
+   * True only for a fully clean run: exit 0, no timeout, no journaled
+   * fatal, and a finish line present. A child that exits 0 with a drained
+   * event loop but no finish (e.g. a hung stream that released its handles)
+   * is NOT clean even though its exit code is 0.
+   */
+  cleanExit: boolean;
   persisted: boolean;
   persistenceError?: Error;
   runResult?: JournalRunResult;
@@ -261,6 +268,7 @@ export async function runInstrumentedOpenWiki(
   return {
     captureLogPath,
     childExitCode: exitCode,
+    cleanExit,
     persisted,
     persistenceError,
     runResult: journal.runResult,

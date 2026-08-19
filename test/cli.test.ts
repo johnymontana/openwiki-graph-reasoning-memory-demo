@@ -58,6 +58,7 @@ function createHarness(options: {
     async (request: OpenWikiRunRequest): Promise<OpenWikiRunRecord> => ({
       captureLogPath: `captures/${request.traceId}.json`,
       childExitCode: 0,
+      cleanExit: true,
       persisted: request.ingest,
       runResult: { command: request.command, model: "claude-haiku-4-5" },
       timedOut: false,
@@ -83,6 +84,7 @@ function createHarness(options: {
         {
           arm: "baseline",
           childExitCode: 0,
+          cleanExit: true,
           persisted: true,
           sessionId: `eval:${evaluationOptions.runId}:baseline:0`,
           stepCount: 3,
@@ -451,6 +453,7 @@ describe("CLI integration", () => {
     harness.runOpenWiki.mockResolvedValueOnce({
       captureLogPath: "captures/failed.json",
       childExitCode: 1,
+      cleanExit: false,
       persisted: false,
       timedOut: false,
       trace: {

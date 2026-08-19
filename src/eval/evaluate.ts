@@ -36,6 +36,7 @@ export interface TrialResult {
   arm: EvaluationArm;
   captureLogPath?: string;
   childExitCode: number | null;
+  cleanExit: boolean;
   error?: string;
   memoryChars?: number;
   persisted: boolean;
@@ -164,6 +165,7 @@ async function runTrial(
   const result: TrialResult = {
     arm,
     childExitCode: null,
+    cleanExit: false,
     persisted: false,
     sessionId,
     stepCount: 0,
@@ -230,6 +232,7 @@ async function runTrial(
 
     result.captureLogPath = record.captureLogPath;
     result.childExitCode = record.childExitCode;
+    result.cleanExit = record.cleanExit;
     result.persisted = record.persisted;
     result.stepCount = record.trace.steps.length;
     result.success = record.trace.success ?? null;
@@ -247,8 +250,7 @@ async function runTrial(
       `[${label}] done: success=${String(result.success)} steps=${result.stepCount} toolCalls=${result.toolCallCount} wikiFiles=${result.wikiFileCount}`,
     );
 
-    const cleanRun = record.childExitCode === 0 && !record.timedOut;
-    if (!options.keepTemp && cleanRun) {
+    if (!options.keepTemp && record.cleanExit) {
       await deps.removeDir(repoCopy);
     }
   } catch (error) {
