@@ -9,7 +9,14 @@ This guide describes the end-to-end proof-of-concept boundary:
 5. Expose the Aura Agent through its hosted MCP endpoint.
 6. Give the retrieved guidance to a later OpenWiki run.
 
-The repository implements the graph store, public and raw-stream recorder, fail-open run-capture wrapper, remote MCP client, token cache, and preflight context adapter. It does not vendor OpenWiki. The checked-in [`patches/openwiki-v0.3.3-reasoning-hooks.patch`](../patches/openwiki-v0.3.3-reasoning-hooks.patch) is the small upstream change required for faithful capture.
+The repository implements the graph store, public and raw-stream recorder, fail-open run-capture wrapper, remote MCP client, token cache, preflight context adapter, a child-process run engine for live instrumented runs, and an A/B recall evaluation. It does not vendor OpenWiki. Two checked-in patches carry the small upstream change required for faithful capture:
+
+| Patch | Base | Notes |
+| --- | --- | --- |
+| [`patches/openwiki-v0.3.3-reasoning-hooks.patch`](../patches/openwiki-v0.3.3-reasoning-hooks.patch) | `60aada6` (v0.3.3 tag + 2 docs commits) | Valid for the latest published release |
+| [`patches/openwiki-main-ea80ddc-reasoning-hooks.patch`](../patches/openwiki-main-ea80ddc-reasoning-hooks.patch) | `ea80ddc` (upstream main, 2026-08-19) | The base of the fork branch `johnymontana/openwiki#reasoning-memory`, which carries the hooks pre-applied |
+
+CI verifies both patches against their exact (immutable) upstream bases and additionally applies the fork-base patch to upstream `main` HEAD as an advisory, never-failing step — a red advisory step means the fork needs a rebase soon.
 
 ## Architecture and trust boundaries
 
@@ -63,12 +70,14 @@ The project uses only the reasoning subset of the Neo4j Agent Memory model:
 
 | Node | Purpose | Important properties |
 | --- | --- | --- |
-| `ReasoningTrace` | One OpenWiki invocation | `id`, `session_id`, `task`, `outcome`, `success`, `started_at`, `completed_at`, `metadata` |
+| `ReasoningTrace` | One OpenWiki invocation | `id`, `session_id`, `repository`, `task`, `outcome`, `success`, `started_at`, `completed_at`, `metadata` |
 | `ReasoningStep` | One observed action in stream order | `id`, `step_number`, `thought`, `action`, `observation`, `timestamp`, `metadata` |
 | `ToolCall` | One correlated tool lifecycle | `id`, `tool_name`, `arguments`, `result`, `status`, `duration_ms`, `error`, `timestamp` |
 | `Tool` | Aggregate identity and reliability statistics | `name`, call counters, total duration, `last_used_at` |
 
 `metadata`, `arguments`, and `result` are JSON strings, matching the storage convention used by Neo4j Agent Memory. The caller supplies the trace ID; the recorder derives stable step IDs and trace/namespace-scoped tool-call IDs so writes can be replayed idempotently.
+
+Repository scoping: `repository` is a first-class, range-indexed property (`trace_repository_idx`) in the normalized form `host/owner/repo` (from the git origin remote; directory basename as fallback — see `deriveRepositoryId`). Both trace-recall Aura tools filter on it, which is what keeps memory from one codebase out of another codebase's runs. Derived success is evidence-based: `null` when no tool call was observed, `true` only when at least one call was observed and every call succeeded. Embedding placeholder properties (`task_embedding`, `embedding`) are set to null only when a node is first created, so embeddings backfilled by agent-memory tooling survive replays.
 
 ### Explicitly excluded
 
@@ -230,13 +239,25 @@ agent.stream(input, {
 });
 ```
 
-The narrowest faithful hook is inside the `for await` loop, before `parseAgentStreamChunk(chunk)` strips fields. This repository includes that hook as [`patches/openwiki-v0.3.3-reasoning-hooks.patch`](../patches/openwiki-v0.3.3-reasoning-hooks.patch). The patch targets OpenWiki v0.3.3 at commit `60aada6c30d7e1d04d253e6ee52836c9a883f607`, and `git apply --check` has been validated against that revision. Apply it to a clean checkout:
+(On current upstream main, `streamMode` is conditional: only the `openai-compatible` provider degrades to `["updates", "tools"]`; the anthropic provider this project runs with keeps `["messages", "tools"]`, so outcome-text capture is unaffected.)
+
+The narrowest faithful hook is inside the `for await` loop, before `parseAgentStreamChunk(chunk)` strips fields. The easiest way to get it is the fork branch, which carries the hooks pre-applied and builds directly:
+
+```sh
+git clone -b reasoning-memory git@github.com:johnymontana/openwiki.git ../openwiki
+cd ../openwiki && pnpm install && pnpm build
+```
+
+To apply the patch to a clean checkout instead, pick the patch that matches your base:
 
 ```sh
 cd /path/to/openwiki
-git switch --detach v0.3.3
-git apply --check /path/to/openwiki-graph-reasoning-memory-demo/patches/openwiki-v0.3.3-reasoning-hooks.patch
-git apply /path/to/openwiki-graph-reasoning-memory-demo/patches/openwiki-v0.3.3-reasoning-hooks.patch
+# Latest release:
+git switch --detach 60aada6c30d7e1d04d253e6ee52836c9a883f607
+git apply /path/to/demo/patches/openwiki-v0.3.3-reasoning-hooks.patch
+# Or the fork base on main:
+git switch --detach ea80ddc3e010ed66202bab159fc95ebb7cb6daee
+git apply /path/to/demo/patches/openwiki-main-ea80ddc-reasoning-hooks.patch
 ```
 
 The added OpenWiki seam invokes the callback before public projection and contains callback failures:
@@ -354,11 +375,13 @@ The supplied Aura Agent tools are read-only. This is why ingestion remains a sep
 
 | Tool | Use |
 | --- | --- |
-| `find-reasoning-for-task` | Full-text retrieval over successful trace tasks/outcomes with ordered steps and tool results |
-| `recent-reasoning-traces` | Recency fallback, optionally restricted to successful traces |
+| `find-reasoning-for-task` | Full-text retrieval over successful trace tasks/outcomes with ordered steps and truncated tool results, scoped by `repository` |
+| `recent-reasoning-traces` | Recency fallback, optionally restricted to successful traces, scoped by `repository` |
 | `openwiki-tool-reliability` | Aggregate call volume, success rate, failures, and latency by tool |
 
-The type discriminator is camelCase: `cypherTemplate`. Each query returns scalar and map projections rather than graph nodes, relationships, paths, or embeddings.
+The type discriminator is camelCase: `cypherTemplate`. Each query returns scalar and map projections rather than graph nodes, relationships, paths, or embeddings. Three retrieval-quality details are deliberate: the full-text search over-fetches 50 hits before the `success = true` and repository filters and only then applies `LIMIT $limit` (so high-ranking failed traces cannot crowd out successful ones); recalled `arguments`/`result`/`error` bodies are truncated with `left()` so five traces cannot flood the agent's context (full bodies stay in the graph for forensics); and the `repository` parameter uses the convention "exact `host/owner/repo`, or `''` when unscoped", which the system prompt instructs the agent to follow.
+
+After changing the tool JSON or system prompt, redeploy with `AURA_AGENT_ID=<id> ./scripts/update-aura-agent.sh` — the cloud agent does not track this repository's files.
 
 [`config/aura-agent-system-prompt.txt`](../config/aura-agent-system-prompt.txt) constrains the agent to reasoning memory, tells it to prefer useful successes and identify relevant failures, and treats stored content as untrusted.
 
@@ -494,20 +517,24 @@ OpenWiki's current connector factory returns an empty tool list when `outputMode
 The POC works around that boundary without broadening OpenWiki's tool permissions. From the CLI:
 
 ```sh
-npm run augment-task -- 'Document the repository authentication architecture'
+npm run augment-task -- --repository github.com/your-org/your-repo 'Document the repository authentication architecture'
 ```
 
 The command prints the augmented task. The equivalent library call is:
 
 ```ts
 const client = createAuraAgentMcpClientFromEnvironment();
-const { augmentedTask, memory } =
-  await augmentOpenWikiTaskWithReasoningMemory(userTask, client);
+const { augmentedTask, memory, recallError, recallDurationMs } =
+  await augmentOpenWikiTaskWithReasoningMemory(userTask, client, {
+    repository: "github.com/your-org/your-repo",
+    timeoutMs: 10_000,
+  });
 
-// Pass augmentedTask as OpenWiki's userMessage.
+// Pass augmentedTask as OpenWiki's userMessage. recallError set means the
+// call failed open: augmentedTask === userTask and the run proceeds.
 ```
 
-The adapter asks for up to five relevant traces, caps the recalled text at 16,000 characters, JSON-string encodes it, neutralizes `<` and `>` so stored text cannot close the delimiter, and appends the result in this form:
+The adapter fails open by design — any MCP failure or timeout returns the original task with `recallError` set, and an empty recall returns the task untouched rather than injecting an empty envelope. On success it asks for up to five relevant traces (scoped to the repository when one is given), caps the recalled text at 16,000 characters, JSON-string encodes it, neutralizes `<` and `>` so stored text cannot close the delimiter, and appends the result in this form:
 
 ```xml
 <openwiki_reasoning_memory trust="untrusted-historical-data" encoding="json-string">
@@ -574,6 +601,30 @@ Re-run that export after the token expires.
 ```
 
 OpenWiki requires exact allowed tool names or an MCP `readOnlyHint`. Its HTTP connector permits environment-backed headers and rejects literal credential-bearing headers. OpenWiki's Custom MCP connector does not itself mint or refresh the Aura machine token, so use this POC's token provider or a wrapper that refreshes the environment value.
+
+## Live instrumented runs
+
+`npm run run -- --repo <path>` executes a real OpenWiki run from the built fork and persists its trace. The architecture is deliberately a child process per run:
+
+- **Fork resolution**: `OPENWIKI_DIR` (default `../openwiki`), with actionable errors when the checkout or its `dist/` is missing, and a hooks canary that refuses builds without `onRawStreamChunk` — an un-patched build would silently persist empty traces.
+- **Child boundary**: the CLI spawns itself as a hidden `openwiki-child` command (node arguments propagated so tsx parents work). This gives a hard timeout (SIGTERM, 10 s grace, SIGKILL) over a possibly hung LangGraph stream and contains OpenWiki's known escaped-subagent-rejection failure mode. OpenWiki's own `installCrashGuard` is never installed in the parent — it calls `process.exit`. The child installs its own journaling fatal handlers instead.
+- **Environment**: `OPENWIKI_PROVIDER=anthropic` pinned, `OPENWIKI_REASONING_EFFORT` stripped (it throws for anthropic), telemetry disabled, and an isolated `HOME` per run by default — `loadOpenWikiEnv` back-fills any unset variable from `~/.openwiki/.env`, so deleting keys from the child env alone is not a defence.
+- **Crash-safe journal**: the child appends one JSONL line per capture event (header first, before the fork import). The parent recovers the journal — tolerant of a truncated final line — into the existing capture-log shape and persists through the standard `translateCaptureLog → saveTrace` seam. Every outcome (clean, crashed, timed out, even a missing journal) yields a persisted trace; failures carry `metadata.error_kind` (`timeout`, `child_fatal`, `child_exit`) and `success: false`.
+- **Artifacts**: each run writes a replayable `captures/<traceId>.json` (works with `npm run demo`/`ingest`) and per-run work files (journal, child config, child.log) under `captures/<traceId>-work/`. Wiki output size is scanned from `<repo>/openwiki/` since OpenWiki's run result carries no file list.
+- The trace's `task` is always the base task; the memory envelope goes only into OpenWiki's `userMessage`, so the full-text recall index never indexes recalled-memory text.
+
+## Evaluating recall (A/B)
+
+`npm run evaluate` measures whether recall changes run behavior instead of assuming it:
+
+1. **Preflight before any spend**: fork present and hooked, `ANTHROPIC_API_KEY` set, Neo4j reachable with schema, and the Aura Agent MCP endpoint answering `tools/list`. One MCP client and one store serve the entire evaluation (a single token exchange against the 15/hour gateway limit).
+2. **Repository id fixed once** from the source repo; temp copies never re-derive it.
+3. **Seed phase**: `--seed-runs` unaugmented runs (`sessionId = eval:<runId>:seed:<k>`) populate the memory the augmented arm will recall.
+4. **Trials**: `--trials` rounds of baseline + augmented, first arm alternating per round to cancel drift, every trial on a fresh copy of the repo (`.git` included; `openwiki/`, `node_modules`, and evaluation state excluded). Sessions follow `eval:<runId>:<arm>:<trial>`; the same facts are duplicated into trace metadata for humans.
+5. **Recall discipline**: the augmented arm recalls through the Aura Agent (retry once). If recall still fails, the trial runs unaugmented tagged `recallFailed`, and the report excludes it from the augmented arm's aggregates — a trial without the intervention must not dilute the arm.
+6. **Resilience**: a crashed or timed-out child still persists a failed trace via journal recovery; no trial failure aborts the schedule; `eval-runs/<runId>/results.json` mirrors every trial locally so Neo4j persistence gaps are visible.
+
+`npm run report -- --run-id <id>` renders per-arm aggregates (success, duration mean ± sd / median, steps, tool calls, failed/cancelled calls, wiki output, recall overhead) plus a per-trial table and a fixed methodology note about what small-N, same-repo results can and cannot support.
 
 ## Security and reasoning policy
 
