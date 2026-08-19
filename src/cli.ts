@@ -87,14 +87,26 @@ export async function runCli(
     }
 
     case "augment-task": {
-      const task = args.join(" ").trim();
+      const { remaining, value: repository } = extractOption(
+        args,
+        "--repository",
+      );
+      const task = remaining.join(" ").trim();
       if (!task) {
-        throw new Error("Usage: npm run augment-task -- <OpenWiki task>");
+        throw new Error(
+          "Usage: npm run augment-task -- [--repository <host/owner/repo>] <OpenWiki task>",
+        );
       }
       const result = await augmentOpenWikiTaskWithReasoningMemory(
         task,
         dependencies.createMcpClient(),
+        { repository },
       );
+      if (result.recallError) {
+        io.error(
+          `Reasoning-memory recall failed open; the task is unaugmented: ${result.recallError.message}`,
+        );
+      }
       io.log(result.augmentedTask);
       return 0;
     }
@@ -141,6 +153,29 @@ async function saveToNeo4j(
   } finally {
     await store.close();
   }
+}
+
+/** Removes one `--name <value>` pair from an argument list. */
+function extractOption(
+  argumentList: string[],
+  name: string,
+): { remaining: string[]; value: string | undefined } {
+  const index = argumentList.indexOf(name);
+  if (index === -1) {
+    return { remaining: argumentList, value: undefined };
+  }
+
+  const value = argumentList[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${name} requires a value.`);
+  }
+  return {
+    remaining: [
+      ...argumentList.slice(0, index),
+      ...argumentList.slice(index + 2),
+    ],
+    value,
+  };
 }
 
 function requiredEnv(environment: NodeJS.ProcessEnv, name: string): string {

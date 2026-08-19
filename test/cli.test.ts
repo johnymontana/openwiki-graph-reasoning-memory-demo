@@ -6,6 +6,7 @@ import type { ReasoningStore } from "../src/store/reasoning-store.js";
 function createHarness(options: {
   environment?: NodeJS.ProcessEnv;
   memory?: AuraAgentMemoryResult;
+  memoryError?: Error;
   saveError?: Error;
 } = {}) {
   const ensureSchema = vi.fn(async () => undefined);
@@ -13,13 +14,18 @@ function createHarness(options: {
     ? vi.fn(async (_trace: unknown) => Promise.reject(options.saveError))
     : vi.fn(async (_trace: unknown) => undefined);
   const close = vi.fn(async () => undefined);
-  const queryMemory = vi.fn(async () =>
-    options.memory ?? {
-      raw: { content: [] },
-      text: "Use glob before read_file.",
-      toolName: "reasoning-memory",
-    },
-  );
+  const queryMemory = vi.fn(async () => {
+    if (options.memoryError) {
+      throw options.memoryError;
+    }
+    return (
+      options.memory ?? {
+        raw: { content: [] },
+        text: "Use glob before read_file.",
+        toolName: "reasoning-memory",
+      }
+    );
+  });
   const getAccessToken = vi.fn(async () => "short-lived-token");
   const createStore = vi.fn(
     () =>
@@ -187,6 +193,60 @@ describe("CLI integration", () => {
     await expect(
       runCli(["augment-task"], harness.io, harness.dependencies),
     ).rejects.toThrow("Usage: npm run augment-task");
+  });
+
+  it("passes --repository through to the recall question", async () => {
+    const harness = createHarness();
+
+    expect(
+      await runCli(
+        [
+          "augment-task",
+          "--repository",
+          "github.com/example/demo-repo",
+          "Document",
+          "the",
+          "repo",
+        ],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).toBe(0);
+    expect(harness.queryMemory).toHaveBeenCalledWith(
+      expect.stringContaining("Repository: github.com/example/demo-repo"),
+    );
+    expect(harness.log.mock.calls[0]?.[0]).toContain("Document the repo");
+  });
+
+  it("rejects --repository without a value", async () => {
+    const harness = createHarness();
+
+    await expect(
+      runCli(
+        ["augment-task", "--repository"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("--repository requires a value.");
+  });
+
+  it("prints the unaugmented task and a warning when recall fails open", async () => {
+    const harness = createHarness({
+      memoryError: new Error("MCP unavailable"),
+    });
+
+    expect(
+      await runCli(
+        ["augment-task", "Document", "the", "repo"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).toBe(0);
+    expect(harness.log).toHaveBeenCalledWith("Document the repo");
+    expect(harness.error.mock.calls[0]?.[0]).toContain(
+      "failed open",
+    );
+    expect(harness.error.mock.calls[0]?.[0]).toContain("MCP unavailable");
   });
 
   it("mints a token with the configured client credentials", async () => {

@@ -2,20 +2,25 @@
   {
     "type": "cypherTemplate",
     "name": "find-reasoning-for-task",
-    "description": "Find successful prior OpenWiki execution traces whose task or outcome resembles the current task, including ordered actions and tool outcomes.",
+    "description": "Find successful prior OpenWiki execution traces whose task or outcome resembles the current task, including ordered actions and truncated tool outcomes. Scope with the repository parameter whenever the request names a repository.",
     "enabled": true,
     "config": {
-      "template": "CALL db.index.fulltext.queryNodes('reasoning_memory_search', $query, {limit: $limit}) YIELD node AS trace, score WHERE trace.success = true OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep) OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall) WITH trace, score, step, call ORDER BY score DESC, step.step_number ASC WITH trace, score, step, collect(CASE WHEN call IS NULL THEN null ELSE {tool: call.tool_name, status: call.status, duration_ms: call.duration_ms, arguments: call.arguments, result: call.result, error: call.error} END) AS raw_calls ORDER BY score DESC, step.step_number ASC WITH trace, score, collect(CASE WHEN step IS NULL THEN null ELSE {step_number: step.step_number, thought: step.thought, action: step.action, observation: step.observation, tool_calls: [item IN raw_calls WHERE item IS NOT NULL]} END) AS raw_steps RETURN trace.id AS trace_id, trace.task AS task, trace.outcome AS outcome, score, [item IN raw_steps WHERE item IS NOT NULL][0..20] AS steps ORDER BY score DESC LIMIT $limit",
+      "template": "CALL db.index.fulltext.queryNodes('reasoning_memory_search', $query, {limit: 50}) YIELD node AS trace, score WHERE trace.success = true AND ($repository IS NULL OR $repository = '' OR trace.repository = $repository) WITH trace, score ORDER BY score DESC LIMIT $limit OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep) OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall) WITH trace, score, step, call ORDER BY score DESC, step.step_number ASC WITH trace, score, step, collect(CASE WHEN call IS NULL THEN null ELSE {tool: call.tool_name, status: call.status, duration_ms: call.duration_ms, arguments: left(call.arguments, 300), result: left(call.result, 300), error: left(call.error, 300)} END) AS raw_calls ORDER BY score DESC, step.step_number ASC WITH trace, score, collect(CASE WHEN step IS NULL THEN null ELSE {step_number: step.step_number, thought: left(step.thought, 500), action: step.action, observation: step.observation, tool_calls: [item IN raw_calls WHERE item IS NOT NULL]} END) AS raw_steps RETURN trace.id AS trace_id, trace.task AS task, left(trace.outcome, 1000) AS outcome, trace.repository AS repository, score, [item IN raw_steps WHERE item IS NOT NULL][0..20] AS steps ORDER BY score DESC",
       "parameters": [
         {
           "name": "query",
           "data_type": "string",
-          "description": "Keywords describing the current OpenWiki task."
+          "description": "Plain keywords describing the current OpenWiki task. Do not use quotes, boolean operators, or other Lucene syntax."
+        },
+        {
+          "name": "repository",
+          "data_type": "string",
+          "description": "Exact repository identifier in host/owner/repo form (for example github.com/example/demo-repo). Pass an empty string when the request does not name a repository."
         },
         {
           "name": "limit",
           "data_type": "integer",
-          "description": "Maximum number of successful traces to return; use 5 unless the caller asks otherwise."
+          "description": "Maximum number of successful traces to return; use 5 unless the caller asks otherwise. Values above 50 are not honored."
         }
       ]
     }
@@ -23,15 +28,20 @@
   {
     "type": "cypherTemplate",
     "name": "recent-reasoning-traces",
-    "description": "Return the most recent OpenWiki reasoning traces and their ordered execution steps for recency-based fallback memory.",
+    "description": "Return the most recent OpenWiki reasoning traces and their ordered execution steps for recency-based fallback memory. Scope with the repository parameter whenever the request names a repository.",
     "enabled": true,
     "config": {
-      "template": "MATCH (trace:ReasoningTrace) WHERE $success_only = false OR trace.success = true WITH trace ORDER BY trace.started_at DESC LIMIT $limit OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep) OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall) WITH trace, step, call ORDER BY trace.started_at DESC, step.step_number ASC WITH trace, step, collect(CASE WHEN call IS NULL THEN null ELSE {tool: call.tool_name, status: call.status, duration_ms: call.duration_ms, error: call.error} END) AS raw_calls ORDER BY trace.started_at DESC, step.step_number ASC WITH trace, collect(CASE WHEN step IS NULL THEN null ELSE {step_number: step.step_number, thought: step.thought, action: step.action, observation: step.observation, tool_calls: [item IN raw_calls WHERE item IS NOT NULL]} END) AS raw_steps RETURN trace.id AS trace_id, trace.task AS task, trace.outcome AS outcome, trace.success AS success, trace.started_at AS started_at, [item IN raw_steps WHERE item IS NOT NULL][0..20] AS steps ORDER BY started_at DESC",
+      "template": "MATCH (trace:ReasoningTrace) WHERE ($success_only = false OR trace.success = true) AND ($repository IS NULL OR $repository = '' OR trace.repository = $repository) WITH trace ORDER BY trace.started_at DESC LIMIT $limit OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep) OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall) WITH trace, step, call ORDER BY trace.started_at DESC, step.step_number ASC WITH trace, step, collect(CASE WHEN call IS NULL THEN null ELSE {tool: call.tool_name, status: call.status, duration_ms: call.duration_ms, error: left(call.error, 300)} END) AS raw_calls ORDER BY trace.started_at DESC, step.step_number ASC WITH trace, collect(CASE WHEN step IS NULL THEN null ELSE {step_number: step.step_number, thought: left(step.thought, 500), action: step.action, observation: step.observation, tool_calls: [item IN raw_calls WHERE item IS NOT NULL]} END) AS raw_steps RETURN trace.id AS trace_id, trace.task AS task, left(trace.outcome, 1000) AS outcome, trace.repository AS repository, trace.success AS success, trace.started_at AS started_at, [item IN raw_steps WHERE item IS NOT NULL][0..20] AS steps ORDER BY started_at DESC",
       "parameters": [
         {
           "name": "limit",
           "data_type": "integer",
           "description": "Maximum number of traces to return; use 5 unless the caller asks otherwise."
+        },
+        {
+          "name": "repository",
+          "data_type": "string",
+          "description": "Exact repository identifier in host/owner/repo form. Pass an empty string when the request does not name a repository."
         },
         {
           "name": "success_only",
