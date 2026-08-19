@@ -19,6 +19,7 @@ const TRACE: ReasoningTrace = {
   id: "trace-1",
   metadata: { source: "openwiki" },
   outcome: "Done",
+  repository: "github.com/example/demo-repo",
   sessionId: "session-1",
   startedAt: "2026-08-15T12:00:00.000Z",
   steps: [
@@ -123,6 +124,30 @@ describe("reasoning-only Cypher", () => {
 
     expect(fileStatements).toEqual([...REASONING_SCHEMA_STATEMENTS]);
   });
+
+  it("scopes traces by repository and indexes the property", () => {
+    expect(UPSERT_TRACE).toContain("rt.repository = $repository");
+    expect(
+      REASONING_SCHEMA_STATEMENTS.some((statement) =>
+        statement.includes("trace_repository_idx"),
+      ),
+    ).toBe(true);
+  });
+
+  it("nulls embedding placeholders only when a node is first created", () => {
+    // Re-upserting a trace must never clobber embeddings added out of band;
+    // agent-memory's only retrieval path is vector search over these fields.
+    const traceOnCreate = UPSERT_TRACE.slice(0, UPSERT_TRACE.indexOf("\nSET "));
+    const stepOnCreate = UPSERT_STEPS.slice(0, UPSERT_STEPS.indexOf("\nSET "));
+    expect(traceOnCreate).toContain("rt.task_embedding = null");
+    expect(stepOnCreate).toContain("rs.embedding = null");
+    expect(UPSERT_TRACE.slice(traceOnCreate.length)).not.toContain(
+      "task_embedding",
+    );
+    expect(UPSERT_STEPS.slice(stepOnCreate.length)).not.toContain(
+      "rs.embedding",
+    );
+  });
 });
 
 describe("Neo4jReasoningStore", () => {
@@ -145,6 +170,7 @@ describe("Neo4jReasoningStore", () => {
         id: TRACE.id,
         metadata: JSON.stringify(TRACE.metadata),
         outcome: TRACE.outcome,
+        repository: TRACE.repository,
         session_id: TRACE.sessionId,
         started_at: TRACE.startedAt,
         success: TRACE.success,

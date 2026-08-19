@@ -58,6 +58,7 @@ describeWithNeo4j("Neo4j reasoning store (live)", () => {
       id: traceId,
       metadata: { command: "update", source: "openwiki" },
       outcome: "Architecture documented.",
+      repository: "github.com/example/integration-repo",
       sessionId: `integration-session-${suffix}`,
       startedAt: "2026-08-16T12:00:00.000Z",
       steps: [
@@ -88,10 +89,37 @@ describeWithNeo4j("Neo4j reasoning store (live)", () => {
     };
 
     await store.saveTrace(trace);
-    await store.saveTrace(trace);
 
     const session = driver.session({ database });
     try {
+      // Embeddings written out of band (e.g. by agent-memory tooling) must
+      // survive replays: the upsert nulls them only when a node is created.
+      await session.run(
+        `MATCH (trace:ReasoningTrace {id: $trace_id})-[:HAS_STEP]->(step:ReasoningStep)
+         SET trace.task_embedding = [0.1, 0.2], step.embedding = [0.3, 0.4]`,
+        { trace_id: traceId },
+      );
+      await store.saveTrace(trace);
+
+      const embeddings = await session.run(
+        `MATCH (trace:ReasoningTrace {id: $trace_id})-[:HAS_STEP]->(step:ReasoningStep)
+         RETURN trace.task_embedding AS task_embedding,
+                step.embedding AS step_embedding,
+                trace.repository AS repository`,
+        { trace_id: traceId },
+      );
+      const embeddingRecord = embeddings.records[0]!;
+      expect(embeddingRecord.get("task_embedding")).toEqual([0.1, 0.2]);
+      expect(embeddingRecord.get("step_embedding")).toEqual([0.3, 0.4]);
+      expect(embeddingRecord.get("repository")).toBe(
+        "github.com/example/integration-repo",
+      );
+
+      const repositoryIndex = await session.run(
+        "SHOW INDEXES YIELD name WHERE name = 'trace_repository_idx' RETURN count(*) AS indexes",
+      );
+      expect(repositoryIndex.records[0]!.get("indexes").toNumber()).toBe(1);
+
       const result = await session.run(
         `MATCH (trace:ReasoningTrace {id: $trace_id})-[h:HAS_STEP]->(step:ReasoningStep)-[u:USES_TOOL]->(call:ToolCall)-[i:INSTANCE_OF]->(tool:Tool)
          RETURN count(DISTINCT trace) AS traces,

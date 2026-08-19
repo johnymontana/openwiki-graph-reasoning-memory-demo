@@ -142,6 +142,7 @@ function toTraceParameters(trace: ReasoningTrace): Record<string, unknown> {
     id: trace.id,
     metadata: serializeJson(trace.metadata ?? {}),
     outcome: trace.outcome ?? null,
+    repository: trace.repository ?? null,
     session_id: trace.sessionId,
     started_at: trace.startedAt,
     success: trace.success ?? null,

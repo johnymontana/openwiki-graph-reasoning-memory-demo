@@ -13,6 +13,9 @@ FOR (n:Tool) REQUIRE n.name IS UNIQUE;
 CREATE INDEX trace_session_idx IF NOT EXISTS
 FOR (n:ReasoningTrace) ON (n.session_id);
 
+CREATE INDEX trace_repository_idx IF NOT EXISTS
+FOR (n:ReasoningTrace) ON (n.repository);
+
 CREATE INDEX trace_success_idx IF NOT EXISTS
 FOR (n:ReasoningTrace) ON (n.success);
 

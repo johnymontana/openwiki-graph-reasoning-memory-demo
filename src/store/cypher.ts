@@ -9,6 +9,7 @@ export const REASONING_SCHEMA_STATEMENTS = [
   "CREATE CONSTRAINT tool_call_id IF NOT EXISTS FOR (n:ToolCall) REQUIRE n.id IS UNIQUE",
   "CREATE CONSTRAINT tool_name IF NOT EXISTS FOR (n:Tool) REQUIRE n.name IS UNIQUE",
   "CREATE INDEX trace_session_idx IF NOT EXISTS FOR (n:ReasoningTrace) ON (n.session_id)",
+  "CREATE INDEX trace_repository_idx IF NOT EXISTS FOR (n:ReasoningTrace) ON (n.repository)",
   "CREATE INDEX trace_success_idx IF NOT EXISTS FOR (n:ReasoningTrace) ON (n.success)",
   "CREATE INDEX trace_error_kind_idx IF NOT EXISTS FOR (n:ReasoningTrace) ON (n.error_kind)",
   "CREATE INDEX tool_call_status_idx IF NOT EXISTS FOR (n:ToolCall) ON (n.status)",
@@ -17,10 +18,11 @@ export const REASONING_SCHEMA_STATEMENTS = [
 
 export const UPSERT_TRACE = `
 MERGE (rt:ReasoningTrace {id: $id})
-ON CREATE SET rt.started_at = datetime($started_at)
+ON CREATE SET rt.started_at = datetime($started_at),
+              rt.task_embedding = null
 SET rt.session_id = $session_id,
+    rt.repository = $repository,
     rt.task = $task,
-    rt.task_embedding = null,
     rt.outcome = $outcome,
     rt.success = $success,
     rt.completed_at = CASE
@@ -35,12 +37,12 @@ export const UPSERT_STEPS = `
 UNWIND $steps AS step
 MATCH (rt:ReasoningTrace {id: $trace_id})
 MERGE (rs:ReasoningStep {id: step.id})
-ON CREATE SET rs.timestamp = datetime(step.created_at)
+ON CREATE SET rs.timestamp = datetime(step.created_at),
+              rs.embedding = null
 SET rs.step_number = step.step_number,
     rs.thought = step.thought,
     rs.action = step.action,
     rs.observation = step.observation,
-    rs.embedding = null,
     rs.metadata = step.metadata
 MERGE (rt)-[hasStep:HAS_STEP]->(rs)
 SET hasStep.order = step.step_number

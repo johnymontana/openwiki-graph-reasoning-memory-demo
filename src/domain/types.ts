@@ -101,6 +101,8 @@ export interface ReasoningTrace {
   id: string;
   metadata: Record<string, unknown>;
   outcome?: string;
+  /** Stable repository identifier (host/owner/repo) used to scope recall. */
+  repository?: string;
   sessionId: string;
   startedAt: string;
   steps: ReasoningStep[];
@@ -116,6 +118,8 @@ export interface OpenWikiTraceRecorderOptions {
   /** Maximum characters retained in an oversized input/output/plan preview. */
   maxSerializedInputChars?: number;
   metadata?: Record<string, unknown>;
+  /** Stable repository identifier (host/owner/repo) used to scope recall. */
+  repository?: string;
   sessionId: string;
   startedAt: TimestampInput;
   task: string;
@@ -124,6 +128,10 @@ export interface OpenWikiTraceRecorderOptions {
 
 export interface FinishTraceOptions {
   completedAt?: TimestampInput;
-  /** If omitted, success is derived from the final tool-call statuses. */
+  /**
+   * If omitted, success is derived from the final tool-call statuses: true
+   * only when at least one call was observed and every call succeeded, and
+   * undefined (stored as null) when no calls were observed at all.
+   */
   success?: boolean;
 }

@@ -76,7 +76,11 @@ describe("readCaptureLog", () => {
     const log = await readCaptureLog("examples/openwiki-run.json");
 
     expect(log.trace.traceId).toBe("openwiki-demo-001");
+    expect(log.trace.repository).toBe("github.com/example/demo-repo");
     expect(log.entries.length).toBeGreaterThan(0);
+    expect(translateCaptureLog(log).repository).toBe(
+      "github.com/example/demo-repo",
+    );
   });
 
   it("rejects invalid JSON", async () => {
@@ -102,6 +106,12 @@ describe("readCaptureLog", () => {
       label: "invalid trace metadata",
       mutate: (log: Record<string, any>) => {
         log.trace.metadata = [];
+      },
+    },
+    {
+      label: "a non-string trace repository",
+      mutate: (log: Record<string, any>) => {
+        log.trace.repository = 42;
       },
     },
     {

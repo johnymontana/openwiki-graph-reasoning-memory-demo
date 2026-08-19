@@ -3,6 +3,7 @@
     "traceId": "openwiki-demo-001",
     "sessionId": "openwiki-session-demo",
     "task": "Inspect a repository and document its architecture",
+    "repository": "github.com/example/demo-repo",
     "startedAt": "2026-08-15T16:00:00.000Z",
     "metadata": {
       "command": "init",

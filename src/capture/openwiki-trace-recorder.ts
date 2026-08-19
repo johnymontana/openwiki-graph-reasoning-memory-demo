@@ -81,6 +81,9 @@ export class OpenWikiTraceRecorder {
         ),
         source: "openwiki",
       },
+      ...(options.repository !== undefined
+        ? { repository: redactSensitiveText(options.repository) }
+        : {}),
       sessionId: options.sessionId,
       startedAt: new Date(this.#startedAtMs).toISOString(),
       steps: [],
@@ -326,10 +329,18 @@ export class OpenWikiTraceRecorder {
     return this.#trace;
   }
 
-  #deriveSuccess(): boolean {
-    return this.#trace.steps.every((step) =>
-      step.toolCalls.every((toolCall) => toolCall.status === "success"),
-    );
+  /**
+   * Success is only derivable from observed evidence: at least one tool call
+   * must exist, and every call must have succeeded. A trace with no observed
+   * calls stays undefined (persisted as null) so the recall filter on
+   * `success = true` is never satisfied by the absence of information.
+   */
+  #deriveSuccess(): boolean | undefined {
+    const toolCalls = this.#trace.steps.flatMap((step) => step.toolCalls);
+    if (toolCalls.length === 0) {
+      return undefined;
+    }
+    return toolCalls.every((toolCall) => toolCall.status === "success");
   }
 
   #endToolCall(

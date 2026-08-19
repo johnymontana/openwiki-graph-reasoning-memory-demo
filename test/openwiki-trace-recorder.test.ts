@@ -473,4 +473,63 @@ describe("OpenWikiTraceRecorder", () => {
     expect(String(result?._preview)).toHaveLength(64);
     expect(JSON.stringify(trace)).not.toContain("output-password");
   });
+
+  it("copies a redacted repository identifier onto the trace", () => {
+    const scoped = new OpenWikiTraceRecorder({
+      repository: "github.com/example/demo-repo",
+      sessionId: "session-1",
+      startedAt: STARTED_AT,
+      task: "Scoped capture",
+      traceId: "trace-repo",
+    });
+    const secretRepository = new OpenWikiTraceRecorder({
+      repository: "Bearer abcdef1234567890",
+      sessionId: "session-1",
+      startedAt: STARTED_AT,
+      task: "Scoped capture",
+      traceId: "trace-repo-secret",
+    });
+
+    expect(scoped.finish().repository).toBe("github.com/example/demo-repo");
+    expect(secretRepository.finish().repository).toBe(
+      `Bearer ${REDACTED_VALUE}`,
+    );
+    expect(recorder().finish({ success: true }).repository).toBeUndefined();
+  });
+
+  it("derives success only from observed tool-call evidence", () => {
+    // No observed tool calls: success is unknowable, not true.
+    expect(recorder().finish().success).toBeUndefined();
+
+    const successful = recorder();
+    successful.record(
+      {
+        call: "read_file(package.json)",
+        id: "call-1",
+        input: {},
+        name: "read_file",
+        type: "tool_start",
+      },
+      "2026-08-15T12:00:01.000Z",
+    );
+    successful.record(
+      { id: "call-1", name: "read_file", status: "finished", type: "tool_end" },
+      "2026-08-15T12:00:02.000Z",
+    );
+    expect(successful.finish().success).toBe(true);
+
+    // An unfinished call is cancelled at completion and blocks derived success.
+    const dangling = recorder();
+    dangling.record(
+      {
+        call: "read_file(package.json)",
+        id: "call-2",
+        input: {},
+        name: "read_file",
+        type: "tool_start",
+      },
+      "2026-08-15T12:00:01.000Z",
+    );
+    expect(dangling.finish().success).toBe(false);
+  });
 });

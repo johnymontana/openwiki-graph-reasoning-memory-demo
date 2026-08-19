@@ -75,6 +75,12 @@ function assertCaptureLog(
     throw new Error(`${filePath} has invalid trace.metadata.`);
   }
   if (
+    value.trace.repository !== undefined &&
+    typeof value.trace.repository !== "string"
+  ) {
+    throw new Error(`${filePath} has an invalid trace.repository.`);
+  }
+  if (
     value.trace.maxSerializedInputChars !== undefined &&
     !Number.isInteger(value.trace.maxSerializedInputChars)
   ) {
