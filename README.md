@@ -259,7 +259,7 @@ ANTHROPIC_API_KEY=replace-me
 # OPENWIKI_MODEL_ID=claude-haiku-4-5
 ```
 
-The runner pins `OPENWIKI_PROVIDER=anthropic` (an ambient `OPENAI_API_KEY` would otherwise win OpenWiki's provider precedence), strips `OPENWIKI_REASONING_EFFORT` (fatal for the anthropic provider), disables OpenWiki telemetry, and by default gives each run an isolated `HOME` so `~/.openwiki/.env` cannot re-inject variables.
+The runner pins `OPENWIKI_PROVIDER=anthropic` (an ambient `OPENAI_API_KEY` would otherwise win OpenWiki's provider precedence), strips `OPENWIKI_REASONING_EFFORT` (fatal for the anthropic provider), disables OpenWiki telemetry, and by default gives each run an isolated `HOME` so `~/.openwiki/.env` cannot re-inject variables. That isolation also means a provider configured only in `~/.openwiki/.env` is invisible to runs: to use another provider, set it explicitly in this repo's `.env` (for example `OPENWIKI_PROVIDER=openai` plus `OPENAI_API_KEY=...` and an `OPENWIKI_MODEL_ID`) — an explicit `OPENWIKI_PROVIDER` is trusted as-is. Note that outcome-text capture requires a provider that streams `messages` mode; on current OpenWiki main only `openai-compatible` does not (unless `OPENWIKI_OPENAI_COMPATIBLE_STREAM_MESSAGES=true`).
 
 Run a real, captured `init` (writes the wiki to `<repo>/openwiki/`, persists the trace, and saves a replayable capture log under `captures/`):
 
