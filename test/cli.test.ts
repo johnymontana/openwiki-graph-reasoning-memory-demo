@@ -1,22 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliDependencies } from "../src/cli.js";
+import type {
+  EvaluationOptions,
+  EvaluationSummary,
+} from "../src/eval/evaluate.js";
 import type { AuraAgentMemoryResult } from "../src/mcp/aura-agent-client.js";
 import type {
   OpenWikiRunRecord,
   OpenWikiRunRequest,
 } from "../src/openwiki/openwiki-runner.js";
-import type { ReasoningStore } from "../src/store/reasoning-store.js";
+import type {
+  ReasoningStore,
+  TraceSummaryRow,
+} from "../src/store/reasoning-store.js";
 
 function createHarness(options: {
   environment?: NodeJS.ProcessEnv;
   memory?: AuraAgentMemoryResult;
   memoryError?: Error;
   saveError?: Error;
+  traceSummaries?: TraceSummaryRow[];
 } = {}) {
   const ensureSchema = vi.fn(async () => undefined);
   const saveTrace = options.saveError
     ? vi.fn(async (_trace: unknown) => Promise.reject(options.saveError))
     : vi.fn(async (_trace: unknown) => undefined);
+  const fetchTraceSummaries = vi.fn(
+    async (_prefix: string) => options.traceSummaries ?? [],
+  );
   const close = vi.fn(async () => undefined);
   const queryMemory = vi.fn(async () => {
     if (options.memoryError) {
@@ -33,7 +44,12 @@ function createHarness(options: {
   const getAccessToken = vi.fn(async () => "short-lived-token");
   const createStore = vi.fn(
     () =>
-      ({ close, ensureSchema, saveTrace }) as unknown as ReasoningStore,
+      ({
+        close,
+        ensureSchema,
+        fetchTraceSummaries,
+        saveTrace,
+      }) as unknown as ReasoningStore,
   );
   const createMcpClient = vi.fn(() => ({ queryMemory }));
   const createTokenProvider = vi.fn(() => ({ getAccessToken }));
@@ -61,6 +77,28 @@ function createHarness(options: {
     }),
   );
   const runOpenWikiChild = vi.fn(async (_configPath: string) => 0);
+  const runEvaluation = vi.fn(
+    async (evaluationOptions: EvaluationOptions): Promise<EvaluationSummary> => ({
+      results: [
+        {
+          arm: "baseline",
+          childExitCode: 0,
+          persisted: true,
+          sessionId: `eval:${evaluationOptions.runId}:baseline:0`,
+          stepCount: 3,
+          success: true,
+          timedOut: false,
+          toolCallCount: 4,
+          traceId: `eval-${evaluationOptions.runId}-baseline-0`,
+          trialIndex: 0,
+          wikiFileCount: 2,
+          wikiTotalBytes: 1_000,
+        },
+      ],
+      resultsPath: `${evaluationOptions.outDir}/${evaluationOptions.runId}/results.json`,
+      runId: evaluationOptions.runId,
+    }),
+  );
   const dependencies: CliDependencies = {
     createMcpClient,
     createStore,
@@ -71,6 +109,7 @@ function createHarness(options: {
         AURA_AGENT_MCP_CLIENT_ID: "client-id",
         AURA_AGENT_MCP_CLIENT_SECRET: "client-secret",
       },
+    runEvaluation,
     runOpenWiki,
     runOpenWikiChild,
   };
@@ -87,10 +126,12 @@ function createHarness(options: {
     deriveRepository,
     ensureSchema,
     error,
+    fetchTraceSummaries,
     getAccessToken,
     io,
     log,
     queryMemory,
+    runEvaluation,
     runOpenWiki,
     runOpenWikiChild,
     saveTrace,
@@ -454,6 +495,124 @@ describe("CLI integration", () => {
     await expect(
       runCli(["openwiki-child"], harness.io, harness.dependencies),
     ).rejects.toThrow("Usage: openwiki-child");
+  });
+
+  it("runs an evaluation with derived defaults and prints the report hint", async () => {
+    const harness = createHarness();
+
+    const exitCode = await runCli(
+      ["evaluate", "--repo", "/tmp/example-repo", "--trials", "1"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(harness.runEvaluation).toHaveBeenCalledOnce();
+    const options = harness.runEvaluation.mock.calls[0]![0];
+    expect(options).toMatchObject({
+      assumeSeeded: false,
+      command: "init",
+      isolateHome: true,
+      keepTemp: false,
+      outDir: "eval-runs",
+      repoPath: "/tmp/example-repo",
+      repository: "github.com/example/derived",
+      seedRuns: 1,
+      task: "init the OpenWiki for github.com/example/derived",
+      timeoutMs: 20 * 60_000,
+      trials: 1,
+    });
+    expect(options.runId).toMatch(/^[A-Za-z0-9._-]+$/u);
+    const costWarning = String(harness.error.mock.calls[0]?.[0]);
+    expect(costWarning).toContain("3 real OpenWiki run(s)");
+    expect(costWarning).toContain("model tokens");
+    expect(harness.log.mock.calls[0]?.[0]).toContain("npm run report -- --run-id");
+  });
+
+  it("validates evaluate arguments before running anything", async () => {
+    const harness = createHarness();
+
+    await expect(
+      runCli(
+        ["evaluate", "--command", "update"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("requires --task");
+    await expect(
+      runCli(
+        ["evaluate", "--run-id", "bad:id"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("--run-id may only contain");
+    await expect(
+      runCli(
+        ["evaluate", "--trials", "0"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("--trials must be a positive integer.");
+    expect(harness.runEvaluation).not.toHaveBeenCalled();
+  });
+
+  it("renders an evaluation report from persisted trace summaries", async () => {
+    const harness = createHarness({
+      traceSummaries: [
+        {
+          cancelledToolCalls: 0,
+          completedAt: "2026-08-19T00:10:00.000Z",
+          failedToolCalls: 1,
+          id: "eval-run1-baseline-0",
+          metadataJson: JSON.stringify({
+            arm: "baseline",
+            durationMs: 60_000,
+            trial: 0,
+            wikiFileCount: 3,
+            wikiTotalBytes: 4_096,
+          }),
+          repository: "github.com/example/demo-repo",
+          sessionId: "eval:run1:baseline:0",
+          startedAt: "2026-08-19T00:00:00.000Z",
+          steps: 5,
+          success: true,
+          task: "init the OpenWiki",
+          toolCalls: 7,
+        },
+      ],
+    });
+
+    const exitCode = await runCli(
+      ["report", "--run-id", "run1"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(harness.fetchTraceSummaries).toHaveBeenCalledWith("eval:run1:");
+    expect(harness.close).toHaveBeenCalledOnce();
+    const rendered = String(harness.log.mock.calls[0]?.[0]);
+    expect(rendered).toContain("# Recall evaluation run1");
+    expect(rendered).toContain("| baseline | 1 | 1 |");
+    expect(rendered).toContain("Methodology and limits");
+  });
+
+  it("fails the report command when no evaluation traces exist", async () => {
+    const harness = createHarness();
+
+    const exitCode = await runCli(
+      ["report", "--run-id", "missing"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(harness.error.mock.calls.flat().join("\n")).toContain(
+      "No traces found",
+    );
+    await expect(
+      runCli(["report"], harness.io, harness.dependencies),
+    ).rejects.toThrow("Usage: npm run report");
   });
 
   it("mints a token with the configured client credentials", async () => {

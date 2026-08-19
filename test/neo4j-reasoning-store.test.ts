@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { ReasoningTrace } from "../src/domain/types.js";
 import {
+  FETCH_TRACE_SUMMARIES,
   REASONING_SCHEMA_STATEMENTS,
   REFRESH_TOOL_STATS,
   UPSERT_STEPS,
@@ -52,6 +53,11 @@ function createDriverHarness() {
   const transactionRun = vi.fn(
     async (_query: string, _parameters?: Record<string, unknown>) => ({}),
   );
+  const readTransactionRun = vi.fn(
+    async (_query: string, _parameters?: Record<string, unknown>) => ({
+      records: [] as Array<{ get(name: string): unknown }>,
+    }),
+  );
   const sessionRun = vi.fn(async (_query: string) => ({}));
   const sessionClose = vi.fn(async () => undefined);
   const executeWrite = vi.fn(
@@ -59,8 +65,14 @@ function createDriverHarness() {
       work: (transaction: { run: typeof transactionRun }) => Promise<unknown>,
     ) => work({ run: transactionRun }),
   );
+  const executeRead = vi.fn(
+    async (
+      work: (transaction: { run: typeof readTransactionRun }) => Promise<unknown>,
+    ) => work({ run: readTransactionRun }),
+  );
   const session = {
     close: sessionClose,
+    executeRead,
     executeWrite,
     run: sessionRun,
   };
@@ -77,11 +89,26 @@ function createDriverHarness() {
     driver,
     driverClose,
     driverSession,
+    executeRead,
     executeWrite,
+    readTransactionRun,
     sessionClose,
     sessionRun,
     transactionRun,
     verifyConnectivity,
+  };
+}
+
+function fakeRecord(values: Record<string, unknown>): {
+  get(name: string): unknown;
+} {
+  return {
+    get(name: string): unknown {
+      if (!(name in values)) {
+        throw new Error(`Unexpected record field: ${name}`);
+      }
+      return values[name];
+    },
   };
 }
 
@@ -93,6 +120,7 @@ describe("reasoning-only Cypher", () => {
       UPSERT_STEPS,
       UPSERT_TOOL_CALLS,
       REFRESH_TOOL_STATS,
+      FETCH_TRACE_SUMMARIES,
     ];
     const allowedGraphTypes = new Set([
       "HAS_STEP",
@@ -357,6 +385,57 @@ describe("Neo4jReasoningStore", () => {
       REASONING_SCHEMA_STATEMENTS,
     );
     expect(harness.sessionClose).toHaveBeenCalledOnce();
+  });
+
+  it("fetches trace summaries by indexed session prefix", async () => {
+    const harness = createDriverHarness();
+    harness.readTransactionRun.mockResolvedValueOnce({
+      records: [
+        fakeRecord({
+          cancelled_tool_calls: { toNumber: () => 1 },
+          completed_at: "2026-08-19T00:05:00.000Z",
+          failed_tool_calls: 0,
+          id: "eval-run1-baseline-0",
+          metadata: '{"arm":"baseline"}',
+          repository: "github.com/example/demo-repo",
+          session_id: "eval:run1:baseline:0",
+          started_at: "2026-08-19T00:00:00.000Z",
+          steps: { toNumber: () => 5 },
+          success: true,
+          task: "init the OpenWiki",
+          tool_calls: 7,
+        }),
+      ],
+    });
+    const store = new Neo4jReasoningStore({ driver: harness.driver });
+
+    const rows = await store.fetchTraceSummaries("eval:run1:");
+
+    expect(harness.readTransactionRun).toHaveBeenCalledWith(
+      FETCH_TRACE_SUMMARIES,
+      { session_id_prefix: "eval:run1:" },
+    );
+    expect(rows).toEqual([
+      {
+        cancelledToolCalls: 1,
+        completedAt: "2026-08-19T00:05:00.000Z",
+        failedToolCalls: 0,
+        id: "eval-run1-baseline-0",
+        metadataJson: '{"arm":"baseline"}',
+        repository: "github.com/example/demo-repo",
+        sessionId: "eval:run1:baseline:0",
+        startedAt: "2026-08-19T00:00:00.000Z",
+        steps: 5,
+        success: true,
+        task: "init the OpenWiki",
+        toolCalls: 7,
+      },
+    ]);
+    expect(harness.sessionClose).toHaveBeenCalledOnce();
+
+    await expect(store.fetchTraceSummaries("")).rejects.toThrow(
+      "A non-empty session id prefix is required.",
+    );
   });
 
   it("closes the driver", async () => {

@@ -1,9 +1,19 @@
 #!/usr/bin/env node
 import { config as loadEnvironment } from "dotenv";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  runEvaluation as executeEvaluation,
+  type EvaluationOptions,
+  type EvaluationSummary,
+} from "./eval/evaluate.js";
+import {
+  buildEvalReport,
+  renderEvalReportMarkdown,
+} from "./eval/report.js";
+import { createTempRepoCopy } from "./eval/temp-repo.js";
 import {
   AuraAgentTokenProvider,
   createAuraAgentMcpClientFromEnvironment,
@@ -42,6 +52,7 @@ export interface CliDependencies {
   ) => Pick<AuraAgentTokenProvider, "getAccessToken">;
   deriveRepository: (repoPath: string) => Promise<string>;
   environment: NodeJS.ProcessEnv;
+  runEvaluation: (options: EvaluationOptions) => Promise<EvaluationSummary>;
   runOpenWiki: (request: OpenWikiRunRequest) => Promise<OpenWikiRunRecord>;
   runOpenWikiChild: (configPath: string) => Promise<number>;
 }
@@ -78,6 +89,58 @@ const DEFAULT_DEPENDENCIES: CliDependencies = {
         request,
         createDefaultRunnerDeps({ demoRoot: DEMO_ROOT, store }),
       );
+    } finally {
+      await store.close();
+    }
+  },
+  runEvaluation: async (options) => {
+    // Preflight before any model spend: recall is MCP-only, so the Aura
+    // Agent endpoint must answer tools/list, and the store must be ready.
+    // One client and one store are shared across every trial (the token
+    // provider caches a single exchange for the whole evaluation).
+    const client = createAuraAgentMcpClientFromEnvironment();
+    const clientWithDiscovery = client as unknown as {
+      listTools?: () => Promise<unknown>;
+    };
+    if (typeof clientWithDiscovery.listTools === "function") {
+      await clientWithDiscovery.listTools();
+    }
+
+    const store = Neo4jReasoningStore.fromEnvironment();
+    try {
+      await store.ensureSchema();
+      const runnerDeps = createDefaultRunnerDeps({
+        demoRoot: DEMO_ROOT,
+        store,
+      });
+      return await executeEvaluation(options, {
+        augment: async (task, repository) => {
+          const augmentation = await augmentOpenWikiTaskWithReasoningMemory(
+            task,
+            client,
+            { repository },
+          );
+          return {
+            augmentedTask: augmentation.augmentedTask,
+            memoryChars: augmentation.memory?.text.length ?? 0,
+            recallDurationMs: augmentation.recallDurationMs,
+            recallError: augmentation.recallError,
+          };
+        },
+        copyRepo: (sourceRepo, destDir) =>
+          createTempRepoCopy(sourceRepo, destDir),
+        ensureDir: async (dir) => {
+          await mkdir(dir, { recursive: true });
+        },
+        log: (message) => {
+          console.error(message);
+        },
+        removeDir: async (dir) => {
+          await rm(dir, { force: true, recursive: true });
+        },
+        runSingle: (request) => runInstrumentedOpenWiki(request, runnerDeps),
+        writeFileText: (path, content) => writeFile(path, content, "utf8"),
+      });
     } finally {
       await store.close();
     }
@@ -277,6 +340,106 @@ export async function runCli(
       return dependencies.runOpenWikiChild(resolve(configPath));
     }
 
+    case "evaluate": {
+      const parsed = parseEvaluateArguments(args);
+      const repoPath = resolve(parsed.repo ?? DEMO_ROOT);
+      const repository =
+        parsed.repository ?? (await dependencies.deriveRepository(repoPath));
+      const task =
+        parsed.task?.trim() || `${parsed.command} the OpenWiki for ${repository}`;
+      const runId = parsed.runId ?? generateEvalRunId();
+      const totalRuns =
+        (parsed.assumeSeeded ? 0 : parsed.seedRuns) + parsed.trials * 2;
+
+      io.error(
+        `Evaluation ${runId}: ${totalRuns} real OpenWiki run(s) on ${repoPath} ` +
+          `(repository ${repository}). Each run costs real model tokens and minutes; ` +
+          "augmented trials also invoke the Aura Agent over MCP.",
+      );
+
+      const summary = await dependencies.runEvaluation({
+        assumeSeeded: parsed.assumeSeeded,
+        command: parsed.command,
+        debug: parsed.debug,
+        isolateHome: parsed.isolateHome,
+        keepTemp: parsed.keepTemp,
+        modelId: parsed.model,
+        outDir: parsed.outDir,
+        repoPath,
+        repository,
+        runId,
+        seedRuns: parsed.seedRuns,
+        task,
+        timeoutMs: parsed.timeoutMinutes * 60_000,
+        trials: parsed.trials,
+      });
+
+      const succeeded = summary.results.filter(
+        (result) => result.success === true,
+      ).length;
+      const broken = summary.results.filter(
+        (result) =>
+          result.error !== undefined ||
+          result.timedOut ||
+          result.childExitCode !== 0,
+      );
+      io.log(
+        [
+          `Evaluation ${summary.runId} finished: ${summary.results.length} trial(s), ${succeeded} succeeded, ${broken.length} failed.`,
+          `  results: ${summary.resultsPath}`,
+          `  report:  npm run report -- --run-id ${summary.runId}`,
+        ].join("\n"),
+      );
+      return broken.length === summary.results.length ? 1 : 0;
+    }
+
+    case "report": {
+      const runIdOption = extractOption(args, "--run-id");
+      const formatOption = extractOption(runIdOption.remaining, "--format");
+      const outOption = extractOption(formatOption.remaining, "--out");
+      if (outOption.remaining.length > 0) {
+        throw new Error(
+          `Unknown report argument(s): ${outOption.remaining.join(" ")}`,
+        );
+      }
+      const runId = runIdOption.value;
+      if (!runId) {
+        throw new Error(
+          "Usage: npm run report -- --run-id <id> [--format md|json] [--out <file>]",
+        );
+      }
+      const format = formatOption.value ?? "md";
+      if (format !== "md" && format !== "json") {
+        throw new Error("--format must be md or json.");
+      }
+
+      const store = dependencies.createStore();
+      let rows;
+      try {
+        rows = await store.fetchTraceSummaries(`eval:${runId}:`);
+      } finally {
+        await store.close();
+      }
+      if (rows.length === 0) {
+        io.error(
+          `No traces found for session prefix eval:${runId}: — did the evaluation persist to this database?`,
+        );
+        return 1;
+      }
+
+      const report = buildEvalReport(rows, runId);
+      const rendered =
+        format === "json"
+          ? JSON.stringify(report, null, 2)
+          : renderEvalReportMarkdown(report);
+      if (outOption.value) {
+        await writeFile(resolve(outOption.value), rendered, "utf8");
+        io.error(`Report written to ${outOption.value}`);
+      }
+      io.log(rendered);
+      return 0;
+    }
+
     case "help":
     case "--help":
     case "-h":
@@ -380,6 +543,117 @@ function parseRunArguments(args: string[]): RunArguments {
   };
 }
 
+interface EvaluateArguments {
+  assumeSeeded: boolean;
+  command: "init" | "update";
+  debug: boolean;
+  isolateHome: boolean;
+  keepTemp: boolean;
+  model?: string;
+  outDir: string;
+  repo?: string;
+  repository?: string;
+  runId?: string;
+  seedRuns: number;
+  task?: string;
+  timeoutMinutes: number;
+  trials: number;
+}
+
+function parseEvaluateArguments(args: string[]): EvaluateArguments {
+  let remaining = args;
+  const options: Record<string, string | undefined> = {};
+  for (const name of [
+    "--repo",
+    "--trials",
+    "--seed-runs",
+    "--command",
+    "--task",
+    "--model",
+    "--repository",
+    "--run-id",
+    "--timeout-minutes",
+    "--out-dir",
+  ]) {
+    const extracted = extractOption(remaining, name);
+    options[name] = extracted.value;
+    remaining = extracted.remaining;
+  }
+  const flags: Record<string, boolean> = {};
+  for (const name of [
+    "--keep-temp",
+    "--assume-seeded",
+    "--no-isolate-home",
+    "--debug",
+  ]) {
+    const extracted = extractFlag(remaining, name);
+    flags[name] = extracted.present;
+    remaining = extracted.remaining;
+  }
+  if (remaining.length > 0) {
+    throw new Error(`Unknown evaluate argument(s): ${remaining.join(" ")}`);
+  }
+
+  const command = options["--command"] ?? "init";
+  if (command !== "init" && command !== "update") {
+    throw new Error("--command must be init or update.");
+  }
+  if (command === "update" && !options["--task"]) {
+    throw new Error(
+      "evaluate --command update requires --task: OpenWiki no-ops an update on a clean tree without one.",
+    );
+  }
+  const runId = options["--run-id"];
+  if (runId !== undefined && !/^[A-Za-z0-9._-]+$/u.test(runId)) {
+    throw new Error(
+      "--run-id may only contain letters, digits, dot, underscore, and dash (it becomes part of session ids).",
+    );
+  }
+
+  return {
+    assumeSeeded: flags["--assume-seeded"]!,
+    command,
+    debug: flags["--debug"]!,
+    isolateHome: !flags["--no-isolate-home"],
+    keepTemp: flags["--keep-temp"]!,
+    model: options["--model"],
+    outDir: options["--out-dir"] ?? "eval-runs",
+    repo: options["--repo"],
+    repository: options["--repository"],
+    runId,
+    seedRuns: options["--seed-runs"]
+      ? parseNonNegativeInteger(options["--seed-runs"], "--seed-runs")
+      : 1,
+    task: options["--task"],
+    timeoutMinutes: options["--timeout-minutes"]
+      ? parsePositiveNumber(options["--timeout-minutes"], "--timeout-minutes")
+      : DEFAULT_RUN_TIMEOUT_MINUTES,
+    trials: options["--trials"]
+      ? parsePositiveInteger(options["--trials"], "--trials")
+      : 2,
+  };
+}
+
+function generateEvalRunId(): string {
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function parsePositiveInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
 function parsePositiveNumber(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -452,6 +726,16 @@ function helpText(): string {
     "                 [--no-ingest] [--no-isolate-home] [--debug]",
     "      Runs an instrumented OpenWiki run from the built fork (OPENWIKI_DIR)",
     "      and persists the reasoning trace. Costs real model tokens.",
+    "  npm run evaluate -- [--repo <path>] [--trials 2] [--seed-runs 1]",
+    "                 [--command init|update] [--task <text>] [--model <id>]",
+    "                 [--repository <id>] [--run-id <id>] [--timeout-minutes 20]",
+    "                 [--out-dir eval-runs] [--keep-temp] [--assume-seeded]",
+    "                 [--no-isolate-home] [--debug]",
+    "      A/B evaluation: seed runs, then interleaved baseline/augmented",
+    "      trials on fresh temp copies. Performs seed-runs + 2*trials REAL",
+    "      OpenWiki runs (default 5) — real model cost and minutes per run.",
+    "      Recall goes through the Aura Agent MCP endpoint.",
+    "  npm run report -- --run-id <id> [--format md|json] [--out <file>]",
     "  npx tsx src/cli.ts mint-token",
   ].join("\n");
 }

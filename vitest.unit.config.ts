@@ -11,6 +11,7 @@ export default defineConfig({
       "test/fork-locator.test.ts",
       "test/memory-context.test.ts",
       "test/openwiki-trace-recorder.test.ts",
+      "test/report.test.ts",
       "test/repository-id.test.ts",
       "test/run-journal.test.ts",
       "test/wiki-stats.test.ts",

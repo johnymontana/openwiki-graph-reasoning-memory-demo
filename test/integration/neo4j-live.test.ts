@@ -159,6 +159,18 @@ describeWithNeo4j("Neo4j reasoning store (live)", () => {
       expect(JSON.parse(record.get("result"))).toEqual({ bytes: 128 });
       expect(record.get("total_calls").toNumber()).toBe(1);
 
+      const summaries = await store.fetchTraceSummaries(
+        `integration-session-${suffix}`,
+      );
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]).toMatchObject({
+        id: traceId,
+        repository: "github.com/example/integration-repo",
+        steps: 1,
+        success: true,
+        toolCalls: 1,
+      });
+
       const schema = await session.run(
         "SHOW CONSTRAINTS YIELD name WHERE name STARTS WITH 'reasoning_' OR name IN ['tool_call_id', 'tool_name'] RETURN collect(name) AS names",
       );

@@ -69,6 +69,39 @@ MERGE (rs)-[:USES_TOOL]->(tc)
 MERGE (tc)-[:INSTANCE_OF]->(tool)
 `;
 
+/**
+ * Per-trace roll-up used by the evaluation report. Metadata is returned as
+ * its stored JSON string: callers parse client-side because JSON-string
+ * properties cannot be filtered or aggregated in Cypher.
+ */
+export const FETCH_TRACE_SUMMARIES = `
+MATCH (trace:ReasoningTrace)
+WHERE trace.session_id STARTS WITH $session_id_prefix
+OPTIONAL MATCH (trace)-[:HAS_STEP]->(step:ReasoningStep)
+OPTIONAL MATCH (step)-[:USES_TOOL]->(call:ToolCall)
+WITH trace,
+     count(DISTINCT step) AS steps,
+     count(DISTINCT call) AS tool_calls,
+     count(DISTINCT CASE WHEN call.status IN ['error', 'timeout'] THEN call END) AS failed_tool_calls,
+     count(DISTINCT CASE WHEN call.status = 'cancelled' THEN call END) AS cancelled_tool_calls
+RETURN trace.id AS id,
+       trace.session_id AS session_id,
+       trace.task AS task,
+       trace.repository AS repository,
+       trace.success AS success,
+       toString(trace.started_at) AS started_at,
+       CASE
+         WHEN trace.completed_at IS NULL THEN null
+         ELSE toString(trace.completed_at)
+       END AS completed_at,
+       trace.metadata AS metadata,
+       steps,
+       tool_calls,
+       failed_tool_calls,
+       cancelled_tool_calls
+ORDER BY started_at ASC
+`;
+
 export const REFRESH_TOOL_STATS = `
 UNWIND $tool_names AS toolName
 MATCH (tool:Tool {name: toolName})

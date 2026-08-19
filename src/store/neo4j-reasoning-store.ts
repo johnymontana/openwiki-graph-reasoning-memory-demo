@@ -5,13 +5,14 @@ import type {
   ToolCall,
 } from "../domain/types.js";
 import {
+  FETCH_TRACE_SUMMARIES,
   REASONING_SCHEMA_STATEMENTS,
   REFRESH_TOOL_STATS,
   UPSERT_STEPS,
   UPSERT_TOOL_CALLS,
   UPSERT_TRACE,
 } from "./cypher.js";
-import type { ReasoningStore } from "./reasoning-store.js";
+import type { ReasoningStore, TraceSummaryRow } from "./reasoning-store.js";
 
 export interface Neo4jReasoningStoreOptions {
   database?: string;
@@ -66,6 +67,39 @@ export class Neo4jReasoningStore implements ReasoningStore {
       for (const statement of REASONING_SCHEMA_STATEMENTS) {
         await session.run(statement);
       }
+    } finally {
+      await session.close();
+    }
+  }
+
+  async fetchTraceSummaries(
+    sessionIdPrefix: string,
+  ): Promise<TraceSummaryRow[]> {
+    if (!sessionIdPrefix) {
+      throw new Error("A non-empty session id prefix is required.");
+    }
+
+    const session = this.#driver.session({ database: this.#database });
+    try {
+      const result = await session.executeRead((transaction) =>
+        transaction.run(FETCH_TRACE_SUMMARIES, {
+          session_id_prefix: sessionIdPrefix,
+        }),
+      );
+      return result.records.map((record) => ({
+        cancelledToolCalls: toJsNumber(record.get("cancelled_tool_calls")),
+        completedAt: (record.get("completed_at") as string | null) ?? null,
+        failedToolCalls: toJsNumber(record.get("failed_tool_calls")),
+        id: record.get("id") as string,
+        metadataJson: (record.get("metadata") as string | null) ?? null,
+        repository: (record.get("repository") as string | null) ?? null,
+        sessionId: record.get("session_id") as string,
+        startedAt: record.get("started_at") as string,
+        steps: toJsNumber(record.get("steps")),
+        success: (record.get("success") as boolean | null) ?? null,
+        task: record.get("task") as string,
+        toolCalls: toJsNumber(record.get("tool_calls")),
+      }));
     } finally {
       await session.close();
     }
@@ -228,6 +262,22 @@ function validateTraceStructure(trace: ReasoningTrace): void {
       toolCallIds.add(toolCall.id);
     }
   }
+}
+
+/** Counts arrive as neo4j Integers unless lossless integers are disabled. */
+function toJsNumber(value: unknown): number {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    "toNumber" in value &&
+    typeof (value as { toNumber: unknown }).toNumber === "function"
+  ) {
+    return (value as { toNumber: () => number }).toNumber();
+  }
+  return Number(value ?? 0);
 }
 
 function serializeJson(value: unknown): string | null {
