@@ -104,5 +104,23 @@ jobs:
           git -C /tmp/openwiki fetch --depth=1 origin 60aada6c30d7e1d04d253e6ee52836c9a883f607
           git -C /tmp/openwiki checkout --detach FETCH_HEAD
 
-      - name: Check reasoning-hook patch
+      - name: Check v0.3.3 reasoning-hook patch
         run: git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-v0.3.3-reasoning-hooks.patch"
+
+      - name: Fetch fork-base OpenWiki revision
+        run: |
+          git -C /tmp/openwiki fetch --depth=1 origin ea80ddc3e010ed66202bab159fc95ebb7cb6daee
+          git -C /tmp/openwiki checkout --detach FETCH_HEAD
+
+      - name: Check fork-base reasoning-hook patch
+        run: git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-hooks.patch"
+
+      # Advisory drift signal (review H1): does the current patch still apply
+      # to upstream main? Never fails the build; a red step here means the
+      # fork branch needs a rebase soon.
+      - name: Check fork-base patch against upstream main (advisory)
+        continue-on-error: true
+        run: |
+          git -C /tmp/openwiki fetch --depth=1 origin main
+          git -C /tmp/openwiki checkout --detach FETCH_HEAD
+          git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-hooks.patch"
