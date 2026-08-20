@@ -551,7 +551,7 @@ describe("CLI integration", () => {
       command: "init",
       isolateHome: true,
       keepTemp: false,
-      outDir: "eval-runs",
+      outDir: resolve("eval-runs"),
       repoPath: REPO_DIR,
       repository: "github.com/example/derived",
       seedRuns: 1,

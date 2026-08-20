@@ -75,5 +75,21 @@ describe("createTempRepoCopy", () => {
     await expect(
       createTempRepoCopy(source, join(source, "nested-copy")),
     ).rejects.toThrow("must live outside the source repository");
+    await expect(createTempRepoCopy(source, source)).rejects.toThrow(
+      "must live outside the source repository",
+    );
+  });
+
+  it("allows a destination under the pruned eval output directory", async () => {
+    // The default layout evaluates the demo repo against copies under its
+    // own eval-runs/ — safe because that directory is excluded from the walk.
+    const source = await createSourceRepo();
+    const destination = join(source, "eval-runs", "run1", "seed-0", "repo");
+
+    await createTempRepoCopy(source, destination);
+
+    expect(await exists(join(destination, "README.md"))).toBe(true);
+    expect(await exists(join(destination, "eval-runs"))).toBe(false);
+    expect(await exists(join(destination, "openwiki"))).toBe(false);
   });
 });

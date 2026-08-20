@@ -297,6 +297,80 @@ describe("OpenWikiTraceRecorder", () => {
     expect(JSON.stringify(trace)).not.toContain("sk-proj-abcdefghijklmnop");
   });
 
+  it("ignores duplicate start events for a still-active call", () => {
+    // Live LangGraph streams re-emit on_tool_start for active calls; the
+    // repeats must not manufacture phantom cancelled calls.
+    const traceRecorder = recorder();
+    const start = {
+      event: "on_tool_start",
+      input: { path: "src/index.ts" },
+      name: "read_file",
+      toolCallId: "call-1",
+    };
+
+    traceRecorder.recordRawChunk([["agent"], "tools", start], "2026-08-15T12:00:01.000Z");
+    traceRecorder.recordRawChunk([["agent"], "tools", start], "2026-08-15T12:00:02.000Z");
+    traceRecorder.recordRawChunk(
+      [
+        ["agent"],
+        "tools",
+        { event: "on_tool_end", name: "read_file", output: "ok", toolCallId: "call-1" },
+      ],
+      "2026-08-15T12:00:03.000Z",
+    );
+
+    const trace = traceRecorder.finish({
+      completedAt: "2026-08-15T12:00:04.000Z",
+    });
+
+    expect(trace.steps).toHaveLength(1);
+    expect(trace.steps[0]?.toolCalls).toHaveLength(1);
+    expect(trace.steps[0]?.toolCalls[0]).toMatchObject({
+      durationMs: 2_000,
+      status: "success",
+    });
+    expect(trace.steps[0]?.metadata.duplicateStartCount).toBe(1);
+    expect(trace.success).toBe(true);
+  });
+
+  it("cancels the previous call when a live id is reused for a different tool", () => {
+    const traceRecorder = recorder();
+
+    traceRecorder.recordRawChunk(
+      [
+        ["agent"],
+        "tools",
+        { event: "on_tool_start", input: {}, name: "read_file", toolCallId: "call-1" },
+      ],
+      "2026-08-15T12:00:01.000Z",
+    );
+    traceRecorder.recordRawChunk(
+      [
+        ["agent"],
+        "tools",
+        { event: "on_tool_start", input: {}, name: "write_file", toolCallId: "call-1" },
+      ],
+      "2026-08-15T12:00:02.000Z",
+    );
+    traceRecorder.recordRawChunk(
+      [
+        ["agent"],
+        "tools",
+        { event: "on_tool_end", name: "write_file", toolCallId: "call-1" },
+      ],
+      "2026-08-15T12:00:03.000Z",
+    );
+
+    const trace = traceRecorder.finish({
+      completedAt: "2026-08-15T12:00:04.000Z",
+    });
+
+    expect(trace.steps).toHaveLength(2);
+    expect(trace.steps[0]?.toolCalls[0]?.status).toBe("cancelled");
+    expect(trace.steps[1]?.toolCalls[0]?.status).toBe("success");
+    expect(trace.success).toBe(false);
+  });
+
   it("extracts only observable main text from raw message tuples", () => {
     const traceRecorder = new OpenWikiTraceRecorder({
       maxSerializedInputChars: 64,

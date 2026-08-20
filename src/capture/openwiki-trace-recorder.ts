@@ -416,10 +416,22 @@ export class OpenWikiTraceRecorder {
     const startedAtMs = toEpochMilliseconds(occurredAt, "event timestamp");
     const correlationId = context.correlationId ?? event.id;
 
-    // IDs are correlation keys in OpenWiki. If a malformed stream reuses a live
-    // ID, preserve the first observation as cancelled instead of overwriting it.
     const previousCall = this.#activeCalls.get(correlationId);
     if (previousCall) {
+      // Real LangGraph streams re-emit on_tool_start for a call that is
+      // already active (observed at ~40% of calls in live runs). A repeat
+      // start for the same tool is a duplicate event: keep the original
+      // observation and drop the repeat, so phantom cancelled calls never
+      // poison derived success or tool reliability statistics.
+      if (previousCall.toolCall.toolName === redactSensitiveText(event.name)) {
+        const duplicateCount = previousCall.step.metadata.duplicateStartCount;
+        previousCall.step.metadata.duplicateStartCount =
+          typeof duplicateCount === "number" ? duplicateCount + 1 : 1;
+        return;
+      }
+
+      // A live ID reused for a different tool is a malformed stream:
+      // preserve the first observation as cancelled instead of overwriting.
       previousCall.toolCall.durationMs = elapsedMilliseconds(
         previousCall.startedAtMs,
         startedAtMs,

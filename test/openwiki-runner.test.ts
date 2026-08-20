@@ -65,7 +65,7 @@ const CLEAN_JOURNAL = journalSource([
     kind: "raw_chunk",
   },
   {
-    finish: { completedAt: "2026-08-19T00:00:03.000Z" },
+    finish: { completedAt: "2026-08-19T00:00:03.000Z", success: true },
     kind: "finish",
     runResult: { command: "init", model: "claude-haiku-4-5" },
   },

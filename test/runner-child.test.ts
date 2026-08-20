@@ -49,7 +49,7 @@ function createDeps(agentModule: OpenWikiAgentModule) {
 }
 
 describe("executeChildRun", () => {
-  it("journals header, capture entries, and a success-free finish in order", async () => {
+  it("journals header, capture entries, and an explicit-success finish in order", async () => {
     let capturedOptions: OpenWikiAgentRunOptions | undefined;
     const agentModule: OpenWikiAgentModule = {
       runOpenWikiAgent: async (command, cwd, options) => {
@@ -88,7 +88,7 @@ describe("executeChildRun", () => {
       RunJournalLine,
       { kind: "finish" }
     >;
-    expect(finish.finish?.success).toBeUndefined();
+    expect(finish.finish?.success).toBe(true);
     expect(finish.runResult).toEqual({
       command: "init",
       model: "claude-haiku-4-5",

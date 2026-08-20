@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ReasoningTrace } from "../domain/types.js";
 import {
   translateCaptureLog,
@@ -301,17 +302,24 @@ export function buildChildNodeArguments(
 }
 
 /* v8 ignore start -- real process spawning; exercised by live smoke runs */
-/** Spawns the demo CLI back into itself as `openwiki-child`. */
+/**
+ * Spawns this project's CLI as `openwiki-child`. The entry point is derived
+ * from this module's own location (src/cli.ts under tsx, dist/cli.js when
+ * built) — never from process.argv, which points at the HOST script when the
+ * runner is embedded as a library and would respawn that script instead.
+ */
 export async function spawnOpenWikiChild(
   configPath: string,
   environment: NodeJS.ProcessEnv,
   logPath: string,
   timeoutMs: number,
 ): Promise<SpawnChildResult> {
-  const entry = process.argv[1];
-  if (!entry) {
-    throw new Error("Cannot determine the CLI entry point for the child run.");
-  }
+  const entry = fileURLToPath(
+    new URL(
+      import.meta.url.endsWith(".ts") ? "../cli.ts" : "../cli.js",
+      import.meta.url,
+    ),
+  );
   const nodeArguments = buildChildNodeArguments(entry, process.execArgv);
 
   const logDescriptor = openSync(logPath, "a");

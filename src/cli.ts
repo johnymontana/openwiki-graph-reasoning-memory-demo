@@ -295,8 +295,9 @@ export async function runCli(
       io.error(
         `Running openwiki ${parsed.command} on ${repoPath} (repository ${repository}); the wiki is written to ${join(repoPath, "openwiki")}.`,
       );
+      const captureDir = resolve(parsed.captureDir);
       const record = await dependencies.runOpenWiki({
-        captureDir: parsed.captureDir,
+        captureDir,
         command: parsed.command,
         debug: parsed.debug,
         ingest: parsed.ingest,
@@ -310,7 +311,7 @@ export async function runCli(
         timeoutMs: parsed.timeoutMinutes * 60_000,
         traceId,
         userMessage,
-        workDir: join(parsed.captureDir, `${traceId}-work`),
+        workDir: join(captureDir, `${traceId}-work`),
       });
 
       for (const warning of record.warnings) {
@@ -366,7 +367,9 @@ export async function runCli(
         isolateHome: parsed.isolateHome,
         keepTemp: parsed.keepTemp,
         modelId: parsed.model,
-        outDir: parsed.outDir,
+        // Absolute: trial paths flow into the child config, whose cwd must
+        // be absolute, and the copy guard compares real locations.
+        outDir: resolve(parsed.outDir),
         repoPath,
         repository,
         runId,

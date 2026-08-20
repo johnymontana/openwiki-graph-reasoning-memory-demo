@@ -163,10 +163,11 @@ export async function executeChildRun(
       },
     );
 
-    // `success` is intentionally omitted: the recorder derives it from the
-    // observed tool-call evidence when the capture log is replayed.
+    // runOpenWikiAgent resolving IS the run succeeding — record that direct
+    // knowledge explicitly rather than leaving success to be derived from
+    // tool statuses (individual tool errors are normal in successful runs).
     deps.appendLine(config.journalPath, {
-      finish: { completedAt: deps.now() },
+      finish: { completedAt: deps.now(), success: true },
       kind: "finish",
       runResult: {
         command: result.command,
