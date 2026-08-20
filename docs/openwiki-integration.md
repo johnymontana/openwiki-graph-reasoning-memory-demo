@@ -163,7 +163,7 @@ Or use the TypeScript driver and the `NEO4J_*` environment values:
 npm run schema
 ```
 
-The schema contains only four unique constraints, four range indexes, and one full-text index named `reasoning_memory_search`. It intentionally creates no vector index: the first POC retrieval path has no external embedding dependency.
+The schema contains only four unique constraints, five range indexes, and one full-text index named `reasoning_memory_search`. It intentionally creates no vector index: the first POC retrieval path has no external embedding dependency.
 
 ## Capture OpenWiki execution
 
@@ -527,7 +527,7 @@ const client = createAuraAgentMcpClientFromEnvironment();
 const { augmentedTask, memory, recallError, recallDurationMs } =
   await augmentOpenWikiTaskWithReasoningMemory(userTask, client, {
     repository: "github.com/your-org/your-repo",
-    timeoutMs: 10_000,
+    timeoutMs: 60_000, // default; live Aura Agent calls routinely take tens of seconds
   });
 
 // Pass augmentedTask as OpenWiki's userMessage. recallError set means the

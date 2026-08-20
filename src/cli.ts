@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { config as loadEnvironment } from "dotenv";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -251,6 +251,7 @@ export async function runCli(
     case "run": {
       const parsed = parseRunArguments(args);
       const repoPath = resolve(parsed.repo);
+      await assertRepositoryDirectory(repoPath);
       if (parsed.command === "update" && !parsed.task) {
         throw new Error(
           "run --command update requires --task: OpenWiki no-ops an update on a clean tree without one.",
@@ -343,6 +344,7 @@ export async function runCli(
     case "evaluate": {
       const parsed = parseEvaluateArguments(args);
       const repoPath = resolve(parsed.repo ?? DEMO_ROOT);
+      await assertRepositoryDirectory(repoPath);
       const repository =
         parsed.repository ?? (await dependencies.deriveRepository(repoPath));
       const task =
@@ -649,6 +651,25 @@ function parseNonNegativeInteger(value: string, name: string): number {
     throw new Error(`${name} must be a non-negative integer.`);
   }
   return parsed;
+}
+
+/**
+ * Refuses placeholder or mistyped repository paths before any recall call or
+ * model spend: OpenWiki will otherwise run its tools against a nonexistent
+ * directory and burn tokens producing a guaranteed-failed trace.
+ */
+async function assertRepositoryDirectory(repoPath: string): Promise<void> {
+  let stats;
+  try {
+    stats = await stat(repoPath);
+  } catch {
+    throw new Error(
+      `--repo path ${repoPath} does not exist. Pass the path of a real repository to document.`,
+    );
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`--repo path ${repoPath} is not a directory.`);
+  }
 }
 
 function parsePositiveNumber(value: string, name: string): number {

@@ -221,7 +221,7 @@ For OpenWiki code mode, generate a preflight-augmented task (scope it to a repos
 npm run augment-task -- --repository github.com/your-org/your-repo 'Document the authentication architecture'
 ```
 
-The same behavior is available through `augmentOpenWikiTaskWithReasoningMemory()`. Pass its `augmentedTask` to OpenWiki. Recalled text is capped at 16,000 characters, JSON-string encoded, has tag delimiters neutralized, and is enclosed in an `openwiki_reasoning_memory` block explicitly marked as untrusted historical data. Recall fails open: on any MCP error or after a 10-second budget, the original task is returned unchanged with `recallError` set, and an empty recall leaves the task untouched rather than injecting an empty envelope.
+The same behavior is available through `augmentOpenWikiTaskWithReasoningMemory()`. Pass its `augmentedTask` to OpenWiki. Recalled text is capped at 16,000 characters, JSON-string encoded, has tag delimiters neutralized, and is enclosed in an `openwiki_reasoning_memory` block explicitly marked as untrusted historical data. Recall fails open: on any MCP error or after a 60-second budget (live Aura Agent calls routinely take tens of seconds), the original task is returned unchanged with `recallError` set, and an empty recall leaves the task untouched rather than injecting an empty envelope.
 
 OpenWiki 0.3.x exposes generic connector tools only in personal mode. Copying [`config/openwiki-custom-mcp.example.json`](config/openwiki-custom-mcp.example.json) to `~/.openwiki/connectors/custom-mcp/config.json` therefore works in personal mode, but does not by itself make the connector available to repository/code mode. The integration guide covers the preflight workaround and the preferred dedicated-tool patch.
 

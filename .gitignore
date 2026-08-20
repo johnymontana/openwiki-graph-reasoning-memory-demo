@@ -6,3 +6,5 @@ coverage/
 .DS_Store
 captures/
 eval-runs/
+# Wiki output from smoke runs targeting this repo itself
+/openwiki/

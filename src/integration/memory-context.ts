@@ -10,7 +10,10 @@ export interface AugmentTaskOptions {
   maxMemoryChars?: number;
   /** Repository identifier (host/owner/repo) used to scope recall. */
   repository?: string;
-  /** Recall budget; on expiry the original task is returned unaugmented. */
+  /**
+   * Recall budget (default DEFAULT_RECALL_TIMEOUT_MS); on expiry the
+   * original task is returned unaugmented.
+   */
   timeoutMs?: number;
 }
 
@@ -27,7 +30,13 @@ export type ReasoningMemoryClient = Pick<AuraAgentMcpClient, "queryMemory">;
 
 export const MAX_MEMORY_CONTEXT_CHARS = 16_000;
 export const DEFAULT_RECALL_LIMIT = 5;
-export const DEFAULT_RECALL_TIMEOUT_MS = 10_000;
+/**
+ * A live Aura Agent invocation (LLM + Cypher tools, routed via europe-west1)
+ * regularly takes tens of seconds; 10s budgets were observed failing open on
+ * real calls. Recall happens before the run starts, so a generous budget
+ * costs latency only, never correctness.
+ */
+export const DEFAULT_RECALL_TIMEOUT_MS = 60_000;
 const MEMORY_TRUNCATION_MARKER = "…[TRUNCATED]";
 
 /**

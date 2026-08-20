@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliDependencies } from "../src/cli.js";
 import type {
@@ -13,6 +15,9 @@ import type {
   ReasoningStore,
   TraceSummaryRow,
 } from "../src/store/reasoning-store.js";
+
+// A real directory: run/evaluate validate --repo before doing anything else.
+const REPO_DIR = tmpdir();
 
 function createHarness(options: {
   environment?: NodeJS.ProcessEnv;
@@ -330,20 +335,20 @@ describe("CLI integration", () => {
     const harness = createHarness();
 
     const exitCode = await runCli(
-      ["run", "--repo", "/tmp/example-repo"],
+      ["run", "--repo", REPO_DIR],
       harness.io,
       harness.dependencies,
     );
 
     expect(exitCode).toBe(0);
-    expect(harness.deriveRepository).toHaveBeenCalledWith("/tmp/example-repo");
+    expect(harness.deriveRepository).toHaveBeenCalledWith(resolve(REPO_DIR));
     expect(harness.runOpenWiki).toHaveBeenCalledOnce();
     const request = harness.runOpenWiki.mock.calls[0]![0];
     expect(request).toMatchObject({
       command: "init",
       ingest: true,
       isolateHome: true,
-      repoPath: "/tmp/example-repo",
+      repoPath: resolve(REPO_DIR),
       repository: "github.com/example/derived",
       task: "init the OpenWiki for github.com/example/derived",
       timeoutMs: 20 * 60_000,
@@ -363,7 +368,7 @@ describe("CLI integration", () => {
       [
         "run",
         "--repo",
-        "/tmp/example-repo",
+        REPO_DIR,
         "--augment",
         "--repository",
         "github.com/example/demo-repo",
@@ -408,7 +413,7 @@ describe("CLI integration", () => {
     });
 
     const exitCode = await runCli(
-      ["run", "--repo", "/tmp/example-repo", "--augment"],
+      ["run", "--repo", REPO_DIR, "--augment"],
       harness.io,
       harness.dependencies,
     );
@@ -425,12 +430,41 @@ describe("CLI integration", () => {
     );
   });
 
+  it("rejects a repository path that does not exist before any spend", async () => {
+    const harness = createHarness();
+
+    await expect(
+      runCli(
+        ["run", "--repo", "/nonexistent/definitely-not-here", "--augment"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("does not exist");
+    await expect(
+      runCli(
+        ["run", "--repo", "package.json"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("is not a directory");
+    await expect(
+      runCli(
+        ["evaluate", "--repo", "/nonexistent/definitely-not-here"],
+        harness.io,
+        harness.dependencies,
+      ),
+    ).rejects.toThrow("does not exist");
+    expect(harness.queryMemory).not.toHaveBeenCalled();
+    expect(harness.runOpenWiki).not.toHaveBeenCalled();
+    expect(harness.runEvaluation).not.toHaveBeenCalled();
+  });
+
   it("requires --task for update runs and --repo for every run", async () => {
     const harness = createHarness();
 
     await expect(
       runCli(
-        ["run", "--repo", "/tmp/example-repo", "--command", "update"],
+        ["run", "--repo", REPO_DIR, "--command", "update"],
         harness.io,
         harness.dependencies,
       ),
@@ -440,7 +474,7 @@ describe("CLI integration", () => {
     ).rejects.toThrow("Usage: npm run run");
     await expect(
       runCli(
-        ["run", "--repo", "/tmp/example-repo", "--frobnicate"],
+        ["run", "--repo", REPO_DIR, "--frobnicate"],
         harness.io,
         harness.dependencies,
       ),
@@ -470,7 +504,7 @@ describe("CLI integration", () => {
     });
 
     const exitCode = await runCli(
-      ["run", "--repo", "/tmp/example-repo"],
+      ["run", "--repo", REPO_DIR],
       harness.io,
       harness.dependencies,
     );
@@ -504,7 +538,7 @@ describe("CLI integration", () => {
     const harness = createHarness();
 
     const exitCode = await runCli(
-      ["evaluate", "--repo", "/tmp/example-repo", "--trials", "1"],
+      ["evaluate", "--repo", REPO_DIR, "--trials", "1"],
       harness.io,
       harness.dependencies,
     );
@@ -518,7 +552,7 @@ describe("CLI integration", () => {
       isolateHome: true,
       keepTemp: false,
       outDir: "eval-runs",
-      repoPath: "/tmp/example-repo",
+      repoPath: REPO_DIR,
       repository: "github.com/example/derived",
       seedRuns: 1,
       task: "init the OpenWiki for github.com/example/derived",
