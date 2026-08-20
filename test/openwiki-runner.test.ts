@@ -179,7 +179,24 @@ describe("runInstrumentedOpenWiki", () => {
       userMessage: REQUEST.userMessage,
     });
     expect(childConfig.trace.repository).toBe(REQUEST.repository);
+    expect(childConfig.recallTool).toBeUndefined();
     expect(harness.ensuredDirs).toContain("/out/captures/trace-1-work/home");
+  });
+
+  it("passes the recall-tool request into the child config", async () => {
+    const harness = createHarness();
+
+    await runInstrumentedOpenWiki(
+      { ...REQUEST, recallTool: true },
+      harness.deps,
+    );
+
+    const childConfig = JSON.parse(
+      harness.writtenFiles.get("/out/captures/trace-1-work/child-config.json")!,
+    );
+    expect(childConfig.recallTool).toEqual({
+      repository: REQUEST.repository,
+    });
   });
 
   it("marks a timed-out run failed with an explicit error kind", async () => {

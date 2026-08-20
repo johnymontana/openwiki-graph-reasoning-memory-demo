@@ -268,7 +268,13 @@ export async function runCli(
         augmented: parsed.augment,
         command: parsed.command,
         outputMode: "repository",
+        recallTool: parsed.recallTool,
       };
+      if (parsed.recallTool) {
+        // Fail now, not mid-run: the child builds its own MCP client from
+        // this same environment, so constructing one validates it early.
+        dependencies.createMcpClient();
+      }
 
       let userMessage = task;
       if (parsed.augment) {
@@ -304,6 +310,7 @@ export async function runCli(
         isolateHome: parsed.isolateHome,
         metadata,
         modelId: parsed.model,
+        recallTool: parsed.recallTool,
         repoPath,
         repository,
         sessionId,
@@ -469,6 +476,7 @@ async function saveToNeo4j(
 interface RunArguments {
   augment: boolean;
   captureDir: string;
+  recallTool: boolean;
   command: "init" | "update";
   debug: boolean;
   ingest: boolean;
@@ -501,6 +509,7 @@ function parseRunArguments(args: string[]): RunArguments {
   const flags: Record<string, boolean> = {};
   for (const name of [
     "--augment",
+    "--recall-tool",
     "--no-ingest",
     "--no-isolate-home",
     "--debug",
@@ -532,6 +541,7 @@ function parseRunArguments(args: string[]): RunArguments {
   return {
     augment: flags["--augment"]!,
     captureDir: options["--capture-dir"] ?? "captures",
+    recallTool: flags["--recall-tool"]!,
     command,
     debug: flags["--debug"]!,
     ingest: !flags["--no-ingest"],
@@ -742,6 +752,7 @@ function helpText(): string {
     "  npm run query-memory -- <question>",
     "  npm run augment-task -- [--repository <host/owner/repo>] <OpenWiki task>",
     "  npm run run -- --repo <path> [--command init|update] [--task <text>] [--augment]",
+    "                 [--recall-tool]",
     "                 [--repository <id>] [--model <id>] [--session <id>]",
     "                 [--timeout-minutes 20] [--capture-dir captures]",
     "                 [--no-ingest] [--no-isolate-home] [--debug]",

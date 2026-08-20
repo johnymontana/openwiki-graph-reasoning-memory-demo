@@ -35,6 +35,7 @@ function createDeps(agentModule: OpenWikiAgentModule) {
     appendLine: (path, line) => {
       lines.push({ line, path });
     },
+    createRecall: vi.fn(() => undefined),
     importAgent: vi.fn(async () => agentModule),
     installFatalHandlers: (onFatal) => {
       fatalHandlers.push(onFatal);
@@ -98,6 +99,53 @@ describe("executeChildRun", () => {
     expect(capturedOptions?.modelId).toBeNull();
     // onEvent is a debug affordance only; capture flows through raw chunks.
     expect(capturedOptions?.onEvent).toBeUndefined();
+  });
+
+  it("wires the recall tool into the run when configured", async () => {
+    let capturedOptions: OpenWikiAgentRunOptions | undefined;
+    const harness = createDeps({
+      runOpenWikiAgent: async (command, _cwd, options) => {
+        capturedOptions = options;
+        return { command, model: "m" };
+      },
+    });
+    const recall = vi.fn(async (query: string) => `remembered ${query}`);
+    harness.deps.createRecall = vi.fn(() => recall);
+
+    await executeChildRun(
+      {
+        ...CONFIG,
+        recallTool: { repository: "github.com/example/demo-repo" },
+      },
+      harness.deps,
+    );
+
+    expect(harness.deps.createRecall).toHaveBeenCalledOnce();
+    expect(capturedOptions?.recallReasoningMemory).toBe(recall);
+    await expect(
+      capturedOptions!.recallReasoningMemory!("prior plan"),
+    ).resolves.toBe("remembered prior plan");
+  });
+
+  it("runs without the tool and notes it when recall cannot be built", async () => {
+    let capturedOptions: OpenWikiAgentRunOptions | undefined;
+    const harness = createDeps({
+      runOpenWikiAgent: async (command, _cwd, options) => {
+        capturedOptions = options;
+        return { command, model: "m" };
+      },
+    });
+
+    const exitCode = await executeChildRun(
+      { ...CONFIG, recallTool: {} },
+      harness.deps,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(capturedOptions?.recallReasoningMemory).toBeUndefined();
+    expect(harness.stderrLines.join("\n")).toContain(
+      "running without the recall tool",
+    );
   });
 
   it("marks a skipped run in the finish line", async () => {

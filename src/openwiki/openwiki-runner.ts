@@ -31,6 +31,12 @@ export interface OpenWikiRunRequest {
   maxSerializedInputChars?: number;
   metadata: Record<string, unknown>;
   modelId?: string;
+  /**
+   * Give the run OpenWiki's recall_reasoning_memory tool (fork feature),
+   * backed by the Aura Agent MCP client inside the child, scoped to
+   * `repository`.
+   */
+  recallTool?: boolean;
   /** Absolute path of the repository to document (run writes openwiki/). */
   repoPath: string;
   repository: string;
@@ -151,6 +157,9 @@ export async function runInstrumentedOpenWiki(
     debug: request.debug,
     journalPath,
     modelId: request.modelId,
+    ...(request.recallTool
+      ? { recallTool: { repository: request.repository } }
+      : {}),
     trace: {
       maxSerializedInputChars: request.maxSerializedInputChars,
       metadata: request.metadata,

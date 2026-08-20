@@ -9,6 +9,7 @@ export * from "./io/capture-log.js";
 export * from "./mcp/aura-agent-client.js";
 export * from "./openwiki/agent-module.js";
 export * from "./openwiki/child-env.js";
+export * from "./openwiki/child-recall.js";
 export * from "./openwiki/fork-locator.js";
 export * from "./openwiki/openwiki-runner.js";
 export * from "./openwiki/repository-id.js";

@@ -53,6 +53,22 @@
   },
   {
     "type": "cypherTemplate",
+    "name": "last-successful-plan",
+    "description": "Return the plan text from the most recent successful OpenWiki run of a repository, verbatim. Use when the caller asks for a previously successful plan to adapt.",
+    "enabled": true,
+    "config": {
+      "template": "MATCH (trace:ReasoningTrace)-[:HAS_STEP]->(step:ReasoningStep) WHERE trace.success = true AND ($repository IS NULL OR $repository = '' OR trace.repository = $repository) AND step.action = 'plan' AND step.thought IS NOT NULL WITH trace, step ORDER BY coalesce(trace.completed_at, trace.started_at) DESC LIMIT 1 RETURN trace.id AS trace_id, trace.repository AS repository, toString(coalesce(trace.completed_at, trace.started_at)) AS completed_at, trace.task AS task, step.thought AS plan",
+      "parameters": [
+        {
+          "name": "repository",
+          "data_type": "string",
+          "description": "Exact repository identifier in host/owner/repo form. Pass an empty string when the request does not name a repository."
+        }
+      ]
+    }
+  },
+  {
+    "type": "cypherTemplate",
     "name": "openwiki-tool-reliability",
     "description": "Rank OpenWiki tools by observed call volume, success rate, failures, and latency.",
     "enabled": true,

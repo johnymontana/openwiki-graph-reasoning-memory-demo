@@ -15,6 +15,11 @@ export interface OpenWikiAgentRunOptions {
   /** Reasoning-hooks patch: lossless LangGraph stream seam. */
   onRawStreamChunk?: (chunk: unknown) => void | Promise<void>;
   /**
+   * Reasoning-memory-tool patch: read-only recall exposed to the agent as
+   * the recall_reasoning_memory tool. Optional; absent means no tool.
+   */
+  recallReasoningMemory?: (query: string) => Promise<string>;
+  /**
    * Always "repository" here. OpenWiki discards the cwd argument entirely
    * when outputMode is omitted, so the field is deliberately required.
    */

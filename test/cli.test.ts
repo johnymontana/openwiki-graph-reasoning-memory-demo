@@ -407,6 +407,24 @@ describe("CLI integration", () => {
     });
   });
 
+  it("enables the recall tool and validates the MCP environment early", async () => {
+    const harness = createHarness();
+
+    const exitCode = await runCli(
+      ["run", "--repo", REPO_DIR, "--recall-tool"],
+      harness.io,
+      harness.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    // Constructing the client is the early env validation.
+    expect(harness.createMcpClient).toHaveBeenCalledOnce();
+    expect(harness.queryMemory).not.toHaveBeenCalled();
+    const request = harness.runOpenWiki.mock.calls[0]![0];
+    expect(request.recallTool).toBe(true);
+    expect(request.metadata).toMatchObject({ recallTool: true });
+  });
+
   it("keeps the run going unaugmented when recall fails open", async () => {
     const harness = createHarness({
       memoryError: new Error("MCP unavailable"),

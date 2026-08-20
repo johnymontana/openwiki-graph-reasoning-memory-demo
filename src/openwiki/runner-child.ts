@@ -3,6 +3,7 @@ import {
   importOpenWikiAgentModule,
   type OpenWikiAgentModule,
 } from "./agent-module.js";
+import { createChildRecallFunction } from "./child-recall.js";
 import {
   appendJournalLine,
   type JournalTraceOptions,
@@ -18,6 +19,11 @@ export interface ChildRunConfig {
   debug?: boolean;
   journalPath: string;
   modelId?: string;
+  /**
+   * When present, the run gains OpenWiki's recall_reasoning_memory tool,
+   * backed by the Aura Agent MCP client built from the child environment.
+   */
+  recallTool?: { repository?: string; timeoutMs?: number };
   threadId?: string;
   trace: JournalTraceOptions;
   userMessage: string | null;
@@ -25,6 +31,13 @@ export interface ChildRunConfig {
 
 export interface ChildRunDeps {
   appendLine: (filePath: string, line: RunJournalLine) => void;
+  /**
+   * Builds the recall function for config.recallTool; undefined (e.g. MCP
+   * environment unset) means the run proceeds without the tool — fail-open.
+   */
+  createRecall: (
+    config: ChildRunConfig,
+  ) => ((query: string) => Promise<string>) | undefined;
   importAgent: (agentEntry: string) => Promise<OpenWikiAgentModule>;
   /**
    * Registers process-level fatal handlers. OpenWiki's own crash guard calls
@@ -63,6 +76,10 @@ export function installProcessFatalHandlers(
 
 const DEFAULT_DEPS: ChildRunDeps = {
   appendLine: appendJournalLine,
+  createRecall: (config) =>
+    config.recallTool
+      ? createChildRecallFunction(process.env, config.recallTool)
+      : undefined,
   importAgent: importOpenWikiAgentModule,
   installFatalHandlers: installProcessFatalHandlers,
   now: () => new Date().toISOString(),
@@ -141,6 +158,16 @@ export async function executeChildRun(
     }
   };
 
+  let recallReasoningMemory: ((query: string) => Promise<string>) | undefined;
+  if (config.recallTool) {
+    recallReasoningMemory = deps.createRecall(config);
+    if (!recallReasoningMemory) {
+      deps.stderr(
+        "reasoning-recall: MCP environment is not configured; running without the recall tool",
+      );
+    }
+  }
+
   try {
     const result = await agentModule.runOpenWikiAgent(
       config.command,
@@ -158,6 +185,7 @@ export async function executeChildRun(
         onPlanSnapshot: journalPlanSnapshot,
         onRawStreamChunk: journalRawChunk,
         outputMode: "repository",
+        recallReasoningMemory,
         threadId: config.threadId,
         userMessage: config.userMessage,
       },
@@ -206,6 +234,16 @@ export function parseChildRunConfig(value: unknown): ChildRunConfig {
   }
   if (record.userMessage !== null && typeof record.userMessage !== "string") {
     throw new Error("Child run config userMessage must be a string or null.");
+  }
+  if (record.recallTool !== undefined) {
+    const recallTool = record.recallTool;
+    if (
+      recallTool === null ||
+      typeof recallTool !== "object" ||
+      Array.isArray(recallTool)
+    ) {
+      throw new Error("Child run config recallTool must be an object.");
+    }
   }
   const trace = record.trace;
   if (trace === null || typeof trace !== "object" || Array.isArray(trace)) {

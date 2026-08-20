@@ -240,8 +240,9 @@ Real instrumented runs execute a patched OpenWiki fork. Two reasoning-hook patch
 | --- | --- | --- |
 | [`patches/openwiki-v0.3.3-reasoning-hooks.patch`](patches/openwiki-v0.3.3-reasoning-hooks.patch) | Upstream commit `60aada6` (release v0.3.3 + 2 docs commits) | Yes, against its pinned base |
 | [`patches/openwiki-main-ea80ddc-reasoning-hooks.patch`](patches/openwiki-main-ea80ddc-reasoning-hooks.patch) | Upstream main @ `ea80ddc` — the base of the fork branch | Yes, against its base, plus an advisory (never-failing) check against upstream `main` HEAD that surfaces drift early |
+| [`patches/openwiki-main-ea80ddc-reasoning-memory-tool.patch`](patches/openwiki-main-ea80ddc-reasoning-memory-tool.patch) | On top of the hooks patch | Yes — CI applies the hooks patch, then checks this one |
 
-Set up the fork once (the `reasoning-memory` branch of `johnymontana/openwiki` carries the hooks pre-applied):
+Set up the fork once (the `reasoning-memory` branch of `johnymontana/openwiki` carries both the capture hooks and the optional `recall_reasoning_memory` tool pre-applied):
 
 ```sh
 git clone -b reasoning-memory git@github.com:johnymontana/openwiki.git ../openwiki
@@ -268,7 +269,7 @@ npm run run -- --repo /path/to/target-repo --command init
 npm run run -- --repo /path/to/target-repo --command update --task 'Refresh the architecture page' --augment
 ```
 
-`--augment` recalls repository-scoped memory through the Aura Agent MCP endpoint before the run; recall failures log a warning and the run proceeds unaugmented. Each run executes OpenWiki in a child process with a hard timeout (default 20 minutes), so a hung stream or an escaped subagent rejection is contained, journaled, and still persisted as a `success: false` trace. **Every run costs real model tokens and takes minutes.**
+`--augment` recalls repository-scoped memory through the Aura Agent MCP endpoint before the run — including, via the `last-successful-plan` tool, the plan from the most recent successful run of this repository, injected as "a plan that previously succeeded — adapt it, don't follow it blindly" so the agent starts from a proven plan instead of planning from scratch. Recall failures log a warning and the run proceeds unaugmented. `--recall-tool` additionally gives the run OpenWiki's `recall_reasoning_memory` tool (a fork feature): the agent can then query memory *mid-run* — read-only, capped at two recalls, fail-open — for example before writing `openwiki/_plan.md` or after a surprising failure. The two flags compose. Each run executes OpenWiki in a child process with a hard timeout (default 20 minutes), so a hung stream or an escaped subagent rejection is contained, journaled, and still persisted as a `success: false` trace. **Every run costs real model tokens and takes minutes.**
 
 ## Evaluate whether recall improves runs
 

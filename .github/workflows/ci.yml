@@ -112,15 +112,20 @@ jobs:
           git -C /tmp/openwiki fetch --depth=1 origin ea80ddc3e010ed66202bab159fc95ebb7cb6daee
           git -C /tmp/openwiki checkout --detach FETCH_HEAD
 
-      - name: Check fork-base reasoning-hook patch
-        run: git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-hooks.patch"
+      # The fork patches stack: reasoning hooks first, then the recall tool.
+      - name: Check fork-base reasoning patches
+        run: |
+          git -C /tmp/openwiki apply "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-hooks.patch"
+          git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-memory-tool.patch"
+          git -C /tmp/openwiki checkout -- .
 
-      # Advisory drift signal (review H1): does the current patch still apply
+      # Advisory drift signal (review H1): does the patch stack still apply
       # to upstream main? Never fails the build; a red step here means the
       # fork branch needs a rebase soon.
-      - name: Check fork-base patch against upstream main (advisory)
+      - name: Check fork patches against upstream main (advisory)
         continue-on-error: true
         run: |
           git -C /tmp/openwiki fetch --depth=1 origin main
           git -C /tmp/openwiki checkout --detach FETCH_HEAD
-          git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-hooks.patch"
+          git -C /tmp/openwiki apply "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-hooks.patch"
+          git -C /tmp/openwiki apply --check "$GITHUB_WORKSPACE/patches/openwiki-main-ea80ddc-reasoning-memory-tool.patch"

@@ -27,6 +27,9 @@ describe("augmentOpenWikiTaskWithReasoningMemory", () => {
       '<openwiki_reasoning_memory trust="untrusted-historical-data" encoding="json-string">',
     );
     expect(result.augmentedTask).toContain("Use glob before opening individual files.");
+    expect(result.augmentedTask).toContain(
+      "adapt it, don't follow it blindly",
+    );
     expect(result.memory?.toolName).toBe("memory");
     expect(result.recallError).toBeUndefined();
     expect(result.recallDurationMs).toBeGreaterThanOrEqual(0);
@@ -59,6 +62,9 @@ describe("augmentOpenWikiTaskWithReasoningMemory", () => {
     );
     expect(queryMemory).toHaveBeenCalledWith(
       expect.stringContaining("Find up to 3 prior OpenWiki execution traces"),
+    );
+    expect(queryMemory).toHaveBeenCalledWith(
+      expect.stringContaining("last-successful-plan"),
     );
   });
 
