@@ -297,6 +297,56 @@ describe("OpenWikiTraceRecorder", () => {
     expect(JSON.stringify(trace)).not.toContain("sk-proj-abcdefghijklmnop");
   });
 
+  it("captures planning artifacts from write_file inputs", () => {
+    // Init runs write /openwiki/_skeleton.md (and delete it themselves);
+    // update runs write /openwiki/_plan.md. Both arrive as the plan step.
+    const traceRecorder = recorder();
+
+    traceRecorder.recordRawChunk(
+      [
+        ["agent"],
+        "tools",
+        {
+          event: "on_tool_start",
+          // Real streams deliver write_file input as a JSON string.
+          input: JSON.stringify({
+            content: "# Wiki skeleton\n- map the runtime",
+            file_path: "/openwiki/_skeleton.md",
+          }),
+          name: "write_file",
+          toolCallId: "call-skeleton",
+        },
+      ],
+      "2026-08-15T12:00:01.000Z",
+    );
+    traceRecorder.recordRawChunk(
+      [
+        ["agent"],
+        "tools",
+        {
+          event: "on_tool_start",
+          input: { content: "regular page", path: "/openwiki/index.md" },
+          name: "write_file",
+          toolCallId: "call-page",
+        },
+      ],
+      "2026-08-15T12:00:02.000Z",
+    );
+
+    const trace = traceRecorder.finish({
+      completedAt: "2026-08-15T12:00:03.000Z",
+    });
+
+    expect(trace.steps[0]).toMatchObject({
+      action: "plan",
+      stepNumber: 1,
+      thought: "# Wiki skeleton\n- map the runtime",
+    });
+    // The write itself is still recorded as an ordinary tool step.
+    expect(trace.steps[1]?.toolCalls[0]?.toolName).toBe("write_file");
+    expect(trace.steps).toHaveLength(3);
+  });
+
   it("ignores duplicate start events for a still-active call", () => {
     // Live LangGraph streams re-emit on_tool_start for active calls; the
     // repeats must not manufacture phantom cancelled calls.

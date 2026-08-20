@@ -176,6 +176,14 @@ export class OpenWikiTraceRecorder {
 
     if (isRawToolStartEvent(rawEvent)) {
       const input = payload.input;
+      // OpenWiki's planning artifacts (update runs: _plan.md; init runs:
+      // _skeleton.md) are written through file tools and may be deleted by
+      // the agent itself before the run ends, so the write input is the
+      // only reliable capture point for the explicit, observable plan.
+      const planContent = extractPlanArtifactContent(name, input);
+      if (planContent !== null) {
+        this.recordPlanSnapshot(planContent, timestamp);
+      }
       this.#startToolCall(
         {
           call: formatObservedToolAction(
@@ -627,6 +635,45 @@ function formatObservedToolAction(
 
 function sanitizeNamespace(namespace: readonly string[]): string[] {
   return namespace.map(redactSensitiveText);
+}
+
+const PLAN_ARTIFACT_BASENAMES = new Set(["_plan.md", "_skeleton.md"]);
+
+/**
+ * Returns the plan text when a tool start is a full write of one of
+ * OpenWiki's planning artifacts, handling both object and JSON-stringified
+ * tool inputs and both observed path keys.
+ */
+function extractPlanArtifactContent(
+  toolName: string,
+  input: unknown,
+): string | null {
+  if (toolName !== "write_file") {
+    return null;
+  }
+
+  let parsedInput: unknown = input;
+  if (typeof parsedInput === "string") {
+    try {
+      parsedInput = JSON.parse(parsedInput);
+    } catch {
+      return null;
+    }
+  }
+  if (!isRecord(parsedInput)) {
+    return null;
+  }
+
+  const path =
+    getStringRecordValue(parsedInput, "file_path") ??
+    getStringRecordValue(parsedInput, "path");
+  const content = getStringRecordValue(parsedInput, "content");
+  if (!path || content === null) {
+    return null;
+  }
+
+  const basename = path.split("/").at(-1) ?? path;
+  return PLAN_ARTIFACT_BASENAMES.has(basename) ? content : null;
 }
 
 function rawToolCorrelationId(
